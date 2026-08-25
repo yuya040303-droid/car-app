@@ -94,11 +94,28 @@ export default function TripForm({ initial, profile, perDiemRate, onSave, onCanc
       showToast("日付と城市（訪問地）を入力してください", "error");
       return;
     }
-    if (days.length >= OVERSEAS_ROW_CAPACITY) {
+    const existingIndex = days.findIndex((d) => d.date === dayDraft.date);
+    if (existingIndex === -1 && days.length >= OVERSEAS_ROW_CAPACITY) {
       showToast(`日別明細は最大${OVERSEAS_ROW_CAPACITY}行までです`, "error");
       return;
     }
-    setDays((d) => [...d, { id: uid(), ...dayDraft }].sort((a, b) => a.date.localeCompare(b.date)));
+    setDays((d) => {
+      if (existingIndex === -1) {
+        return [...d, { id: uid(), ...dayDraft }].sort((a, b) => a.date.localeCompare(b.date));
+      }
+      // 同じ日付の行が既にある場合は新規行を作らず、入力された項目だけを上書きしてマージする
+      const merged = { ...d[existingIndex] };
+      merged.city = dayDraft.city || merged.city;
+      if (dayDraft.allowance !== "") merged.allowance = dayDraft.allowance;
+      if (dayDraft.lodging !== "") merged.lodging = dayDraft.lodging;
+      if (dayDraft.routeText) merged.routeText = dayDraft.routeText;
+      if (dayDraft.transportAmount !== "") merged.transportAmount = dayDraft.transportAmount;
+      if (dayDraft.remark) merged.remark = dayDraft.remark;
+      const next = [...d];
+      next[existingIndex] = merged;
+      return next.sort((a, b) => a.date.localeCompare(b.date));
+    });
+    showToast(existingIndex === -1 ? "日別明細を追加しました" : "同じ日付の明細を更新しました", "info");
     setDayDraft(emptyDay());
   };
   const removeDay = (id) => setDays((d) => d.filter((x) => x.id !== id));
