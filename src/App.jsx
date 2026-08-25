@@ -45,7 +45,6 @@ const tripEntryCount = (trip) => (trip.days || []).length + (trip.domesticDays |
 const seedTrips = () => [
   {
     id: uid(),
-    purpose: "定例営業会議",
     header: { name: DEFAULT_PROFILE.name, department: "1部1課", rateUSD: "", rateJPY: "0.0485", rateEUR: "", rateTWD: "" },
     days: [
       { id: uid(), date: "2026-08-10", city: "大阪", allowance: 3000, lodging: 12000, routeText: "東京→新大阪", transportAmount: 28000, remark: "" },
@@ -60,7 +59,6 @@ const seedTrips = () => [
   },
   {
     id: uid(),
-    purpose: "システム導入立会い",
     header: { name: DEFAULT_PROFILE.name, department: "1部1課", rateUSD: "", rateJPY: "0.0485", rateEUR: "", rateTWD: "" },
     days: [
       { id: uid(), date: "2026-07-20", city: "福岡", allowance: 3000, lodging: 8000, routeText: "羽田→福岡", transportAmount: 45000, remark: "" },
@@ -99,7 +97,6 @@ function TripCard({ trip, onClick }) {
           <div style={{ fontSize: 12, color: "#718096", marginTop: 2 }}>
             {start ? `${fmtDate(start)} 〜 ${fmtDate(end)}` : "日程未入力"}
           </div>
-          {trip.purpose && <div style={{ fontSize: 12, color: "#A0AEC0", marginTop: 4 }}>{trip.purpose}</div>}
         </div>
         <StatusBadge status={trip.status} />
       </div>
@@ -360,7 +357,6 @@ export default function App() {
               </div>
               <StatusBadge status={detailTrip.status} />
             </div>
-            {detailTrip.purpose && <div style={{ fontSize: 13, color: "#4A5568", background: "#F7FAFC", borderRadius: 8, padding: 8, marginBottom: 12 }}>{detailTrip.purpose}</div>}
 
             {(detailTrip.days || []).length > 0 && (
               <>

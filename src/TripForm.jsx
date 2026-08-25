@@ -33,6 +33,7 @@ const emptyFlightSettings = () => ({
 });
 
 const isKoreaCountry = (text) => /韓国|korea/i.test(String(text || "").trim());
+const HOME_BASE = "上海"; // 出張元（STYLEM 1部1課・上海駐在）
 
 const normalizeDate = (raw) => {
   const s = String(raw || "").trim();
@@ -71,7 +72,6 @@ function EntryList({ entries, onRemove, render }) {
  * だが、同じ入力を使い回すため二重入力にはならない。
  */
 export default function TripForm({ initial, profile, perDiemRate, onSave, onCancel, showToast }) {
-  const [purpose, setPurpose] = useState(initial?.purpose || "");
   const [header, setHeader] = useState(
     initial?.header || { name: profile.name, department: profile.dept, rateUSD: "", rateJPY: "", rateEUR: "", rateTWD: "" }
   );
@@ -176,14 +176,21 @@ export default function TripForm({ initial, profile, perDiemRate, onSave, onCanc
     });
     setDays((prev) => {
       const map = new Map(prev.map((d) => [d.date, d]));
-      for (const c of calc) {
+      const dest = flightSettings.defaultCity;
+      calc.forEach((c, i) => {
+        let autoCity = dest;
+        if (dest) {
+          if (calc.length === 1) autoCity = `${HOME_BASE}⇄${dest}`;
+          else if (i === 0) autoCity = `${HOME_BASE}→${dest}`;
+          else if (i === calc.length - 1) autoCity = `${dest}→${HOME_BASE}`;
+        }
         const existing = map.get(c.date);
         if (existing) {
-          map.set(c.date, { ...existing, allowance: c.amount, city: existing.city || flightSettings.defaultCity, remark: existing.remark || c.note });
+          map.set(c.date, { ...existing, allowance: c.amount, city: existing.city || autoCity, remark: existing.remark || c.note });
         } else {
-          map.set(c.date, { id: uid(), date: c.date, city: flightSettings.defaultCity, allowance: c.amount, lodging: "", routeText: "", transportAmount: "", remark: c.note });
+          map.set(c.date, { id: uid(), date: c.date, city: autoCity, allowance: c.amount, lodging: "", routeText: "", transportAmount: "", remark: c.note });
         }
-      }
+      });
       const merged = Array.from(map.values()).sort((a, b) => a.date.localeCompare(b.date));
       if (merged.length > OVERSEAS_ROW_CAPACITY) {
         showToast(`日別明細は最大${OVERSEAS_ROW_CAPACITY}行までのため反映できませんでした`, "error");
@@ -268,7 +275,7 @@ export default function TripForm({ initial, profile, perDiemRate, onSave, onCanc
     return day === 0 || day === 6;
   }).length;
 
-  const buildData = () => ({ purpose, header, days, domesticDays, legs, hotels });
+  const buildData = () => ({ header, days, domesticDays, legs, hotels });
 
   const validate = () => {
     if (!header.name.trim()) return "氏名を入力してください";
@@ -322,11 +329,6 @@ export default function TripForm({ initial, profile, perDiemRate, onSave, onCanc
         <div style={{ fontSize: 12, color: "#2B6CB0", lineHeight: 1.6 }}>
           日別の出張明細を入力すると、そのまま提出用の旅費精算書（.xlsx）を生成できます。
         </div>
-      </div>
-
-      <div style={cardStyle}>
-        <label style={labelStyle}>出張目的（任意・一覧表示用のメモ）</label>
-        <input style={inputStyle} placeholder="例：定例営業会議" value={purpose} onChange={(e) => setPurpose(e.target.value)} />
       </div>
 
       {/* ヘッダー情報 */}
@@ -408,28 +410,43 @@ export default function TripForm({ initial, profile, perDiemRate, onSave, onCanc
               />
             </div>
             <ReceiptUpload
-              label="📷 フライト画面から出発時刻を読み取る"
+              label="📷 フライト画面から出発時刻・行先を読み取る"
               showToast={showToast}
               recognize={recognizeFlight}
-              describeResult={(r) => (r.departureTime ? `出発${r.departureTime}` : null)}
-              onExtracted={(r) => setFlightSettings((f) => ({ ...f, departureTime: r.departureTime || f.departureTime }))}
+              describeResult={(r) => [r.departureTime && `出発${r.departureTime}`, r.destinationCity && `行先候補:${r.destinationCity}`].filter(Boolean).join("／") || null}
+              onExtracted={(r) =>
+                setFlightSettings((f) => ({
+                  ...f,
+                  departureTime: r.departureTime || f.departureTime,
+                  defaultCity: r.destinationCity || f.defaultCity,
+                }))
+              }
             />
             <ReceiptUpload
-              label="📷 フライト画面から到着時刻を読み取る"
+              label="📷 フライト画面から到着時刻・行先を読み取る"
               showToast={showToast}
               recognize={recognizeFlight}
-              describeResult={(r) => (r.arrivalTime ? `到着${r.arrivalTime}` : null)}
-              onExtracted={(r) => setFlightSettings((f) => ({ ...f, arrivalTime: r.arrivalTime || f.arrivalTime }))}
+              describeResult={(r) => [r.arrivalTime && `到着${r.arrivalTime}`, r.destinationCity && `行先候補:${r.destinationCity}`].filter(Boolean).join("／") || null}
+              onExtracted={(r) =>
+                setFlightSettings((f) => ({
+                  ...f,
+                  arrivalTime: r.arrivalTime || f.arrivalTime,
+                  defaultCity: r.destinationCity || f.defaultCity,
+                }))
+              }
             />
           </div>
         )}
-        <label style={labelStyle}>既定の訪問都市（新規に作成される日の城市欄の初期値）</label>
+        <label style={labelStyle}>行先都市（{HOME_BASE}⇄行先。フライト画面の読み取りから自動入力されます）</label>
         <input
           style={{ ...miniInput, marginBottom: 8 }}
           placeholder="例：大阪"
           value={flightSettings.defaultCity}
           onChange={(e) => setFlightSettings((f) => ({ ...f, defaultCity: e.target.value }))}
         />
+        <div style={{ ...helpText, marginTop: -4 }}>
+          自動計算で反映される城市は、初日「{HOME_BASE}→行先」・最終日「行先→{HOME_BASE}」・中日「行先」の形式になります。
+        </div>
         <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12, color: "#4A5568", marginBottom: 10 }}>
           <input type="checkbox" checked={flightSettings.excludeWeekend} onChange={(e) => setFlightSettings((f) => ({ ...f, excludeWeekend: e.target.checked }))} />
           土日は手当を対象外にする

@@ -55,6 +55,24 @@ export function parseReceiptText(rawText) {
 
 const DEPARTURE_KEYWORDS = ["出発", "Departure", "Dep.", "Dep ", "DEP"];
 const ARRIVAL_KEYWORDS = ["到着", "Arrival", "Arr.", "Arr ", "ARR"];
+const HOME_CITY_PATTERNS = [/上海/, /shanghai/i, /\bPVG\b/, /\bSHA\b/];
+
+/**
+ * フライト画面のテキストから「上海⇄行先」の区間表記を探し、上海側ではない
+ * 方の都市名を行先候補として返す。見つからなければ null。
+ */
+function extractDestinationCity(text) {
+  const routeRe = /([一-鿿ァ-ヶー]{2,10}|[A-Za-z]{2,20})\s*(?:\([A-Za-z]{3}\))?\s*(?:→|->|-|~|⇄)\s*([一-鿿ァ-ヶー]{2,10}|[A-Za-z]{2,20})\s*(?:\([A-Za-z]{3}\))?/g;
+  let m;
+  while ((m = routeRe.exec(text))) {
+    const [, a, b] = m;
+    const aIsHome = HOME_CITY_PATTERNS.some((p) => p.test(a));
+    const bIsHome = HOME_CITY_PATTERNS.some((p) => p.test(b));
+    if (aIsHome && !bIsHome) return b;
+    if (bIsHome && !aIsHome) return a;
+  }
+  return null;
+}
 
 /**
  * フライト画面（予約確認画面等）のOCRテキストから、出発時刻・到着時刻の
@@ -96,8 +114,9 @@ export function parseFlightText(rawText) {
   const arrMatch = findNear(ARRIVAL_KEYWORDS);
   const departureTime = depMatch?.value || times[0]?.value || null;
   const arrivalTime = arrMatch && arrMatch !== depMatch ? arrMatch.value : times.find((t) => t.value !== departureTime)?.value || null;
+  const destinationCity = extractDestinationCity(text);
 
-  return { departureTime, arrivalTime, rawText: text };
+  return { departureTime, arrivalTime, destinationCity, rawText: text };
 }
 
 async function runOcr(file, onProgress) {

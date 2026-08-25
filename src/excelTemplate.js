@@ -70,7 +70,7 @@ export async function generateTravelExpenseExcel(data) {
     ws.getCell(`E${row}`).value = num(day.lodging);
     ws.getCell(`F${row}`).value = day.routeText || "";
     ws.getCell(`G${row}`).value = num(day.transportAmount);
-    ws.getCell(`I${row}`).value = day.remark || "";
+    // 備考（I列）はExcelへ自動反映しない（利用者の指示）。範囲クリア済みのため空欄のまま。
   });
 
   // --- 国内（中国国内）出張 rows 30-31 ---
