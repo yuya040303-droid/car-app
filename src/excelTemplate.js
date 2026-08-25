@@ -24,6 +24,26 @@ const clearRange = (ws, startRow, endRow, cols) => {
   }
 };
 
+const round2 = (n) => Math.round((n + Number.EPSILON) * 100) / 100;
+
+const numericValue = (v) => (typeof v === "number" ? v : 0);
+
+const sumCol = (ws, col, r1, r2) => {
+  let s = 0;
+  for (let r = r1; r <= r2; r++) s += numericValue(ws.getCell(`${col}${r}`).value);
+  return s;
+};
+
+/**
+ * ExcelJSはテンプレートの数式をそのまま保持するが、計算済みの
+ * キャッシュ値までは書き込まない。Excelが自動再計算しないビューア
+ * （一部のモバイルアプリ等）で開くと空欄に見えてしまうため、数式は
+ * 維持しつつ、こちらで計算した結果もキャッシュとして明示的に書き込む。
+ */
+const setFormulaWithCache = (ws, ref, formula, result) => {
+  ws.getCell(ref).value = { formula, result };
+};
+
 /**
  * data shape:
  * {
@@ -106,6 +126,44 @@ export async function generateTravelExpenseExcel(data) {
     wsDetail.getCell(`B${row}`).value = h.hotelName || "";
     wsDetail.getCell(`D${row}`).value = num(h.amount);
   });
+
+  // --- 集計セルの再計算キャッシュを書き込む（数式は維持） ---
+  for (let r = 10; r <= 25; r++) {
+    const rowTotal = numericValue(ws.getCell(`E${r}`).value) + numericValue(ws.getCell(`G${r}`).value);
+    setFormulaWithCache(ws, `H${r}`, `SUM(E${r}:G${r})`, rowTotal);
+  }
+  const D26v = sumCol(ws, "D", 10, 25);
+  const E26v = sumCol(ws, "E", 10, 25);
+  const G26v = sumCol(ws, "G", 10, 25);
+  const H26v = sumCol(ws, "H", 10, 25);
+  setFormulaWithCache(ws, "D26", "SUM(D10:D25)", D26v);
+  setFormulaWithCache(ws, "E26", "SUM(E10:E25)", E26v);
+  setFormulaWithCache(ws, "G26", "SUM(G10:G25)", G26v);
+  setFormulaWithCache(ws, "H26", "SUM(H10:H25)", H26v);
+
+  const rateJPY = num(data.fxRates?.JPY) || 0;
+  const D27v = round2(D26v * rateJPY);
+  const E27v = round2(E26v * rateJPY);
+  const G27v = round2(G26v * rateJPY);
+  const I27v = round2(D27v + G27v + E27v);
+  setFormulaWithCache(ws, "D27", "ROUND(D26*D4,2)", D27v);
+  setFormulaWithCache(ws, "E27", "ROUND(E26*D4,2)", E27v);
+  setFormulaWithCache(ws, "G27", "ROUND(G26*D4,2)", G27v);
+  setFormulaWithCache(ws, "I27", "D27+G27+E27", I27v);
+
+  const E30v = numericValue(ws.getCell("E30").value);
+  const E31v = numericValue(ws.getCell("E31").value);
+  const H30v = round2(E30v + E31v);
+  const H29v = I27v;
+  const H31v = round2(H29v + H30v);
+  setFormulaWithCache(ws, "H29", "I27", H29v);
+  setFormulaWithCache(ws, "H30", "E30+E31", H30v);
+  setFormulaWithCache(ws, "H31", "H29+H30", H31v);
+
+  const legTotal = sumCol(wsDetail, "D", 3, 9);
+  setFormulaWithCache(wsDetail, "G10", "SUM(D3:D9)", legTotal);
+  const hotelTotal = sumCol(wsDetail, "D", 14, 15);
+  setFormulaWithCache(wsDetail, "D16", "SUM(D14:D15)", hotelTotal);
 
   workbook.calcProperties.fullCalcOnLoad = true;
 
