@@ -53,11 +53,54 @@ export function parseReceiptText(rawText) {
   return { amount, date, memo, rawText: text };
 }
 
+const DEPARTURE_KEYWORDS = ["出発", "Departure", "Dep.", "Dep ", "DEP"];
+const ARRIVAL_KEYWORDS = ["到着", "Arrival", "Arr.", "Arr ", "ARR"];
+
 /**
- * 画像ファイルをOCRし、金額・日付・店舗名の候補を返す。
- * onProgress(0-100) で読み取り進捗を通知する。
+ * フライト画面（予約確認画面等）のOCRテキストから、出発時刻・到着時刻の
+ * 候補をヒューリスティックに抽出する。時刻表記（HH:MM）のうち、
+ * 「出発/到着」等のキーワードに近いものを採用する。見つからない場合は
+ * 最初と2番目の時刻を出発/到着として仮定する。あくまで候補であり、
+ * 利用者による確認・修正を前提とする。
  */
-export async function recognizeReceipt(file, onProgress) {
+export function parseFlightText(rawText) {
+  const text = toHalfWidth(rawText || "");
+  const timeRe = /([01]?\d|2[0-3]):([0-5]\d)/g;
+  const times = [];
+  let m;
+  while ((m = timeRe.exec(text))) {
+    times.push({ index: m.index, value: `${m[1].padStart(2, "0")}:${m[2]}` });
+  }
+
+  const findNear = (keywords) => {
+    let best = null;
+    let bestDist = Infinity;
+    for (const kw of keywords) {
+      let searchFrom = 0;
+      let idx;
+      while ((idx = text.indexOf(kw, searchFrom)) !== -1) {
+        for (const t of times) {
+          const dist = Math.abs(t.index - idx);
+          if (dist < bestDist) {
+            bestDist = dist;
+            best = t;
+          }
+        }
+        searchFrom = idx + kw.length;
+      }
+    }
+    return bestDist < 40 ? best : null;
+  };
+
+  const depMatch = findNear(DEPARTURE_KEYWORDS);
+  const arrMatch = findNear(ARRIVAL_KEYWORDS);
+  const departureTime = depMatch?.value || times[0]?.value || null;
+  const arrivalTime = arrMatch && arrMatch !== depMatch ? arrMatch.value : times.find((t) => t.value !== departureTime)?.value || null;
+
+  return { departureTime, arrivalTime, rawText: text };
+}
+
+async function runOcr(file, onProgress) {
   const worker = await createWorker("jpn+eng", 1, {
     workerPath: "/worker.min.js",
     corePath: "/tesseract-core/",
@@ -70,8 +113,26 @@ export async function recognizeReceipt(file, onProgress) {
     const {
       data: { text },
     } = await worker.recognize(file);
-    return parseReceiptText(text);
+    return text;
   } finally {
     await worker.terminate();
   }
+}
+
+/**
+ * 領収書画像をOCRし、金額・日付・店舗名の候補を返す。
+ * onProgress(0-100) で読み取り進捗を通知する。
+ */
+export async function recognizeReceipt(file, onProgress) {
+  const text = await runOcr(file, onProgress);
+  return parseReceiptText(text);
+}
+
+/**
+ * フライト画面（予約確認画面）の画像をOCRし、出発・到着時刻の候補を返す。
+ * onProgress(0-100) で読み取り進捗を通知する。
+ */
+export async function recognizeFlight(file, onProgress) {
+  const text = await runOcr(file, onProgress);
+  return parseFlightText(text);
 }

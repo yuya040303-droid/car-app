@@ -1,6 +1,8 @@
 import { useState } from "react";
 import { cardStyle, labelStyle, inputStyle, primaryBtn, ghostBtn } from "./styles.js";
 import ReceiptUpload from "./ReceiptUpload.jsx";
+import { recognizeFlight } from "./receiptOcr.js";
+import { calcJapanDailyAllowances, calcKoreaDailyAllowances } from "./perDiemRules.js";
 import {
   generateTravelExpenseExcel,
   downloadExcelBuffer,
@@ -19,6 +21,25 @@ const emptyDay = () => ({ date: todayStr(), city: "", allowance: "", lodging: ""
 const emptyDomestic = () => ({ date: todayStr(), location: "", method: "", amount: "" });
 const emptyLeg = () => ({ date: todayStr(), from: "", to: "", amount: "", method: "", memo: "" });
 const emptyHotel = () => ({ period: "", hotelName: "", amount: "" });
+const emptyFlightSettings = () => ({
+  country: "japan",
+  rank: "general",
+  startDate: todayStr(),
+  endDate: todayStr(),
+  departureTime: "",
+  arrivalTime: "",
+  defaultCity: "",
+  excludeWeekend: false,
+});
+
+const normalizeDate = (raw) => {
+  const s = String(raw || "").trim();
+  let m = s.match(/^(\d{4})[-/](\d{1,2})[-/](\d{1,2})$/);
+  if (m) return `${m[1]}-${m[2].padStart(2, "0")}-${m[3].padStart(2, "0")}`;
+  m = s.match(/^(\d{1,2})[-/](\d{1,2})$/);
+  if (m) return `${new Date().getFullYear()}-${m[1].padStart(2, "0")}-${m[2].padStart(2, "0")}`;
+  return s;
+};
 
 const smallBtn = { background: "#1A2980", color: "#fff", border: "none", borderRadius: 8, padding: "8px 14px", fontSize: 12, cursor: "pointer", flexShrink: 0 };
 const miniInput = { ...inputStyle, background: "#fff", fontSize: 13, padding: "8px 10px" };
@@ -62,6 +83,9 @@ export default function TripForm({ initial, profile, perDiemRate, onSave, onCanc
   const [hotels, setHotels] = useState(initial?.hotels || []);
   const [hotelDraft, setHotelDraft] = useState(emptyHotel());
   const [generating, setGenerating] = useState(false);
+  const [flightSettings, setFlightSettings] = useState(emptyFlightSettings());
+  const [koreaPreview, setKoreaPreview] = useState(null);
+  const [icText, setIcText] = useState("");
 
   const addDay = () => {
     if (!dayDraft.date || !dayDraft.city.trim()) {
@@ -119,6 +143,104 @@ export default function TripForm({ initial, profile, perDiemRate, onSave, onCanc
   };
   const removeHotel = (id) => setHotels((h) => h.filter((x) => x.id !== id));
 
+  const applyAutoAllowance = () => {
+    if (!flightSettings.startDate || !flightSettings.endDate) {
+      showToast("出張期間（開始日・終了日）を入力してください", "error");
+      return;
+    }
+    if (flightSettings.startDate > flightSettings.endDate) {
+      showToast("終了日は開始日以降にしてください", "error");
+      return;
+    }
+    if (flightSettings.country === "korea") {
+      const calc = calcKoreaDailyAllowances({
+        startDate: flightSettings.startDate,
+        endDate: flightSettings.endDate,
+        excludeWeekend: flightSettings.excludeWeekend,
+        rank: flightSettings.rank,
+      });
+      setKoreaPreview(calc);
+      showToast("韓国出張の手当（USD建て）を参考値として計算しました。日別明細（円建て）への自動反映はできません");
+      return;
+    }
+    setKoreaPreview(null);
+    const calc = calcJapanDailyAllowances({
+      startDate: flightSettings.startDate,
+      endDate: flightSettings.endDate,
+      departureTime: flightSettings.departureTime,
+      arrivalTime: flightSettings.arrivalTime,
+      excludeWeekend: flightSettings.excludeWeekend,
+      rank: flightSettings.rank,
+    });
+    setDays((prev) => {
+      const map = new Map(prev.map((d) => [d.date, d]));
+      for (const c of calc) {
+        const existing = map.get(c.date);
+        if (existing) {
+          map.set(c.date, { ...existing, allowance: c.amount, city: existing.city || flightSettings.defaultCity, remark: existing.remark || c.note });
+        } else {
+          map.set(c.date, { id: uid(), date: c.date, city: flightSettings.defaultCity, allowance: c.amount, lodging: "", routeText: "", transportAmount: "", remark: c.note });
+        }
+      }
+      const merged = Array.from(map.values()).sort((a, b) => a.date.localeCompare(b.date));
+      if (merged.length > OVERSEAS_ROW_CAPACITY) {
+        showToast(`日別明細は最大${OVERSEAS_ROW_CAPACITY}行までのため反映できませんでした`, "error");
+        return prev;
+      }
+      return merged;
+    });
+    showToast(`${calc.length}日分の手当を規定表に基づいて自動計算し反映しました`);
+  };
+
+  const applyIcStatement = () => {
+    const lines = icText
+      .split("\n")
+      .map((l) => l.trim())
+      .filter(Boolean);
+    if (lines.length === 0) {
+      showToast("IC明細を貼り付けてください", "error");
+      return;
+    }
+    let includedTotal = 0;
+    let excludedTotal = 0;
+    let includedCount = 0;
+    let excludedCount = 0;
+    const byDate = new Map();
+    for (const line of lines) {
+      const parts = line.split(/[,\t]/).map((p) => p.trim());
+      if (parts.length < 4) continue;
+      const [rawDate, type, , rawAmount] = parts;
+      const amount = Number(String(rawAmount).replace(/[^\d.-]/g, ""));
+      if (!Number.isFinite(amount) || amount === 0) continue;
+      const date = normalizeDate(rawDate);
+      if (/物販/.test(type)) {
+        excludedTotal += amount;
+        excludedCount += 1;
+        continue;
+      }
+      includedTotal += amount;
+      includedCount += 1;
+      byDate.set(date, (byDate.get(date) || 0) + amount);
+    }
+    if (includedCount === 0 && excludedCount === 0) {
+      showToast("有効な明細行が見つかりませんでした（日付,種別,区間,金額の形式で貼り付けてください）", "error");
+      return;
+    }
+    setDays((prev) => {
+      const map = new Map(prev.map((d) => [d.date, d]));
+      for (const [date, amt] of byDate) {
+        const existing = map.get(date);
+        if (existing) {
+          map.set(date, { ...existing, transportAmount: Number(existing.transportAmount || 0) + amt });
+        } else {
+          map.set(date, { id: uid(), date, city: flightSettings.defaultCity, allowance: "", lodging: "", routeText: "IC明細取込", transportAmount: amt, remark: "" });
+        }
+      }
+      return Array.from(map.values()).sort((a, b) => a.date.localeCompare(b.date));
+    });
+    showToast(`交通費に${includedCount}件（¥${includedTotal.toLocaleString()}）を計上し、${excludedCount}件（物販・¥${excludedTotal.toLocaleString()}）を除外しました`);
+  };
+
   const autoAddPerDiem = () => {
     if (!dayDraft.date) {
       showToast("日付を入力してください", "error");
@@ -137,6 +259,12 @@ export default function TripForm({ initial, profile, perDiemRate, onSave, onCanc
   const overseasCnyTotal = Math.round(overseasJpyTotal * jpyRate * 100) / 100;
   const domesticCnyTotal = sum(domesticDays, "amount");
   const grandTotal = Math.round((overseasCnyTotal + domesticCnyTotal) * 100) / 100;
+  const legsTotal = sum(legs, "amount");
+  const transportMismatch = legs.length > 0 && legsTotal !== transportTotal;
+  const weekendDayCount = days.filter((d) => {
+    const day = new Date(d.date + "T00:00:00").getDay();
+    return day === 0 || day === 6;
+  }).length;
 
   const buildData = () => ({ purpose, header, days, domesticDays, legs, hotels });
 
@@ -226,6 +354,117 @@ export default function TripForm({ initial, profile, perDiemRate, onSave, onCanc
           </div>
         </div>
         <div style={{ ...helpText, marginTop: 8, marginBottom: 0 }}>* 人民元換算の合計計算に使用されるのは JPY レートのみです（社内レートを都度入力してください）。</div>
+      </div>
+
+      {/* 手当自動計算（フライト時刻ベースの規定表） */}
+      <div style={cardStyle}>
+        <div style={sectionTitle}>手当を自動計算</div>
+        <div style={helpText}>出張期間とフライトの出発／到着時刻から、規定表に基づいて日別の手当を自動算定します。</div>
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginBottom: 8 }}>
+          <div>
+            <span style={{ fontSize: 11, color: "#718096" }}>国</span>
+            <select
+              style={{ ...miniInput, marginTop: 3 }}
+              value={flightSettings.country}
+              onChange={(e) => setFlightSettings((f) => ({ ...f, country: e.target.value }))}
+            >
+              <option value="japan">日本</option>
+              <option value="korea">韓国（Excel未対応・参考値のみ）</option>
+            </select>
+          </div>
+          <div>
+            <span style={{ fontSize: 11, color: "#718096" }}>役職区分</span>
+            <select style={{ ...miniInput, marginTop: 3 }} value={flightSettings.rank} onChange={(e) => setFlightSettings((f) => ({ ...f, rank: e.target.value }))}>
+              <option value="general">一般社員</option>
+            </select>
+          </div>
+          <div>
+            <span style={{ fontSize: 11, color: "#718096" }}>出発日</span>
+            <input type="date" style={{ ...miniInput, marginTop: 3 }} value={flightSettings.startDate} onChange={(e) => setFlightSettings((f) => ({ ...f, startDate: e.target.value }))} />
+          </div>
+          <div>
+            <span style={{ fontSize: 11, color: "#718096" }}>帰着日</span>
+            <input type="date" style={{ ...miniInput, marginTop: 3 }} value={flightSettings.endDate} onChange={(e) => setFlightSettings((f) => ({ ...f, endDate: e.target.value }))} />
+          </div>
+        </div>
+        {flightSettings.country === "japan" && (
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginBottom: 8 }}>
+            <div>
+              <span style={{ fontSize: 11, color: "#718096" }}>出発時刻（出発日の判定に使用）</span>
+              <input
+                type="time"
+                style={{ ...miniInput, marginTop: 3 }}
+                value={flightSettings.departureTime}
+                onChange={(e) => setFlightSettings((f) => ({ ...f, departureTime: e.target.value }))}
+              />
+            </div>
+            <div>
+              <span style={{ fontSize: 11, color: "#718096" }}>到着時刻（帰着日の判定に使用）</span>
+              <input
+                type="time"
+                style={{ ...miniInput, marginTop: 3 }}
+                value={flightSettings.arrivalTime}
+                onChange={(e) => setFlightSettings((f) => ({ ...f, arrivalTime: e.target.value }))}
+              />
+            </div>
+            <ReceiptUpload
+              label="📷 フライト画面から出発時刻を読み取る"
+              showToast={showToast}
+              recognize={recognizeFlight}
+              describeResult={(r) => (r.departureTime ? `出発${r.departureTime}` : null)}
+              onExtracted={(r) => setFlightSettings((f) => ({ ...f, departureTime: r.departureTime || f.departureTime }))}
+            />
+            <ReceiptUpload
+              label="📷 フライト画面から到着時刻を読み取る"
+              showToast={showToast}
+              recognize={recognizeFlight}
+              describeResult={(r) => (r.arrivalTime ? `到着${r.arrivalTime}` : null)}
+              onExtracted={(r) => setFlightSettings((f) => ({ ...f, arrivalTime: r.arrivalTime || f.arrivalTime }))}
+            />
+          </div>
+        )}
+        <label style={labelStyle}>既定の訪問都市（新規に作成される日の城市欄の初期値）</label>
+        <input
+          style={{ ...miniInput, marginBottom: 8 }}
+          placeholder="例：大阪"
+          value={flightSettings.defaultCity}
+          onChange={(e) => setFlightSettings((f) => ({ ...f, defaultCity: e.target.value }))}
+        />
+        <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12, color: "#4A5568", marginBottom: 10 }}>
+          <input type="checkbox" checked={flightSettings.excludeWeekend} onChange={(e) => setFlightSettings((f) => ({ ...f, excludeWeekend: e.target.checked }))} />
+          土日は手当を対象外にする
+        </label>
+        <button type="button" onClick={applyAutoAllowance} style={{ ...smallBtn, width: "100%" }}>
+          🧮 {flightSettings.country === "korea" ? "手当を参考計算する（USD・反映不可）" : "手当を自動計算して日別明細に反映"}
+        </button>
+        {koreaPreview && (
+          <div style={{ marginTop: 10, background: "#FFFAF0", borderRadius: 8, padding: 8 }}>
+            {koreaPreview.map((c) => (
+              <div key={c.date} style={{ display: "flex", justifyContent: "space-between", fontSize: 12, color: "#4A5568", padding: "3px 0" }}>
+                <span>{c.date}（{c.note}）</span>
+                <span>{c.amount} USD</span>
+              </div>
+            ))}
+            <div style={{ fontSize: 11, color: "#B7791F", marginTop: 4 }}>韓国様式のExcelテンプレートをいただき次第、自動反映に対応します。</div>
+          </div>
+        )}
+      </div>
+
+      {/* IC明細の一括取り込み */}
+      <div style={cardStyle}>
+        <div style={sectionTitle}>IC明細の一括取り込み（任意）</div>
+        <div style={helpText}>
+          「日付,種別,区間,金額」の形式で1行1件貼り付けてください（カンマまたはタブ区切り）。種別に「物販」を含む行は交通費から自動的に除外されます。
+        </div>
+        <textarea
+          style={{ ...inputStyle, minHeight: 90, marginBottom: 8, resize: "vertical", fontFamily: "monospace", fontSize: 12 }}
+          placeholder={"2026-07-21,乗車,新大阪→岐阜羽島,970\n2026-07-21,物販,コンビニ,350"}
+          value={icText}
+          onChange={(e) => setIcText(e.target.value)}
+        />
+        <button type="button" onClick={applyIcStatement} style={{ ...smallBtn, width: "100%" }}>
+          ＋ 交通費に取り込む（物販を除外）
+        </button>
       </div>
 
       {/* 日別出張明細（海外＝日本国内） */}
@@ -406,6 +645,22 @@ export default function TripForm({ initial, profile, perDiemRate, onSave, onCanc
         <div style={{ display: "flex", justifyContent: "space-between", fontSize: 15, fontWeight: 700, padding: "8px 0 0", borderTop: "1px solid #EDF2F7", marginTop: 4 }}>
           <span style={{ color: "#4A5568" }}>総金額</span>
           <span style={{ color: "#1A2980" }}>{fmtCny(grandTotal)}</span>
+        </div>
+
+        <div style={{ marginTop: 10, paddingTop: 10, borderTop: "1px solid #EDF2F7" }}>
+          <div style={{ fontSize: 12, fontWeight: 700, color: "#2D3748", marginBottom: 6 }}>検算</div>
+          {legs.length > 0 && (
+            <div style={{ fontSize: 12, color: transportMismatch ? "#C53030" : "#2F855A", marginBottom: 3 }}>
+              {transportMismatch ? "⚠" : "✅"} 明細シートの交通合計（{fmtYen(legsTotal)}）と日別交通費合計（{fmtYen(transportTotal)}）
+              {transportMismatch ? "が一致しません" : "が一致しています"}
+            </div>
+          )}
+          {weekendDayCount > 0 && (
+            <div style={{ fontSize: 12, color: "#718096" }}>
+              ℹ 出張期間中に土日が{weekendDayCount}日含まれています{flightSettings.excludeWeekend ? "（手当対象外の設定が有効です）" : "（必要に応じて手当・交通費を除外してください）"}
+            </div>
+          )}
+          {legs.length === 0 && weekendDayCount === 0 && <div style={{ fontSize: 12, color: "#A0AEC0" }}>特に警告はありません。</div>}
         </div>
       </div>
 

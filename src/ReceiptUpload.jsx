@@ -1,7 +1,17 @@
 import { useRef, useState } from "react";
 import { recognizeReceipt } from "./receiptOcr.js";
 
-export default function ReceiptUpload({ label = "📷 領収書を読み取る", onExtracted, showToast }) {
+/**
+ * 画像OCRの共通アップロードボタン。デフォルトは領収書用（金額・日付抽出）。
+ * `recognize` / `describeResult` を差し替えるとフライト画面の時刻抽出などにも使える。
+ */
+export default function ReceiptUpload({
+  label = "📷 領収書を読み取る",
+  onExtracted,
+  showToast,
+  recognize = recognizeReceipt,
+  describeResult = (r) => (r.amount ? `金額候補：¥${r.amount.toLocaleString()}` : null),
+}) {
   const inputRef = useRef(null);
   const [loading, setLoading] = useState(false);
   const [progress, setProgress] = useState(0);
@@ -13,15 +23,16 @@ export default function ReceiptUpload({ label = "📷 領収書を読み取る",
     setLoading(true);
     setProgress(0);
     try {
-      const result = await recognizeReceipt(file, setProgress);
+      const result = await recognize(file, setProgress);
       onExtracted(result);
-      if (result.amount) {
-        showToast?.(`領収書を読み取りました（金額候補：¥${result.amount.toLocaleString()}）。内容をご確認ください`, "info");
+      const desc = describeResult(result);
+      if (desc) {
+        showToast?.(`読み取りました（${desc}）。内容をご確認ください`, "info");
       } else {
-        showToast?.("領収書を読み取りましたが金額を自動認識できませんでした。手動で入力してください", "error");
+        showToast?.("読み取りましたが自動認識できませんでした。手動で入力してください", "error");
       }
     } catch (err) {
-      showToast?.("領収書の読み取りに失敗しました", "error");
+      showToast?.("画像の読み取りに失敗しました", "error");
     } finally {
       setLoading(false);
     }
