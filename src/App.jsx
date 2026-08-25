@@ -1,10 +1,29 @@
 import { useState } from "react";
 import TripForm from "./TripForm.jsx";
+import TravelApplicationForm from "./TravelApplicationForm.jsx";
 import { generateTravelExpenseExcel, downloadExcelBuffer } from "./excelTemplate.js";
 import { cardStyle, labelStyle, inputStyle, overlay, modal, primaryBtn, ghostBtn } from "./styles.js";
 
 /* ---------------- データ定義 ---------------- */
-const DEFAULT_PROFILE = { name: "田中 太郎", dept: "営業部" };
+const PROFILE_STORAGE_KEY = "travelExpenseApp.profile";
+const DEFAULT_PROFILE = {
+  name: "田中 太郎",
+  dept: "営業部",
+  passportNo: "",
+  employeeId: "",
+  email: "",
+  overseasMobile: "",
+  emergencyContact: "",
+};
+const loadStoredProfile = () => {
+  try {
+    const raw = localStorage.getItem(PROFILE_STORAGE_KEY);
+    if (!raw) return DEFAULT_PROFILE;
+    return { ...DEFAULT_PROFILE, ...JSON.parse(raw) };
+  } catch {
+    return DEFAULT_PROFILE;
+  }
+};
 const DEFAULT_PER_DIEM_RATE = 3000;
 
 const STATUS = {
@@ -113,7 +132,7 @@ function TripCard({ trip, onClick }) {
 
 /* ---------------- メインアプリ ---------------- */
 export default function App() {
-  const [profile, setProfile] = useState(DEFAULT_PROFILE);
+  const [profile, setProfile] = useState(loadStoredProfile);
   const [view, setView] = useState("list");
   const [trips, setTrips] = useState(seedTrips);
   const [statusFilter, setStatusFilter] = useState("all");
@@ -127,6 +146,15 @@ export default function App() {
   const showToast = (msg, type = "success") => {
     setToast({ msg, type });
     setTimeout(() => setToast(null), 2800);
+  };
+
+  const saveProfile = () => {
+    try {
+      localStorage.setItem(PROFILE_STORAGE_KEY, JSON.stringify(profile));
+      showToast("プロフィールを保存しました");
+    } catch {
+      showToast("プロフィールの保存に失敗しました", "error");
+    }
   };
 
   const detailTrip = trips.find((t) => t.id === detailId) || null;
@@ -230,6 +258,7 @@ export default function App() {
         <div style={{ display: "flex", background: "#fff", borderBottom: "1px solid #E2E8F0", position: "sticky", top: 68, zIndex: 99 }}>
           {[
             { key: "list", label: "📋 一覧" },
+            { key: "application", label: "📝 出張申請書" },
             { key: "settings", label: "⚙ 設定" },
           ].map((tab) => (
             <button
@@ -292,6 +321,11 @@ export default function App() {
           </>
         )}
 
+        {/* ---- 出張申請書 ---- */}
+        {view === "application" && (
+          <TravelApplicationForm profile={profile} showToast={showToast} onOpenSettings={() => setView("settings")} />
+        )}
+
         {/* ---- 新規/編集記録（Excel生成もここで行う） ---- */}
         {view === "form" && (
           <TripForm
@@ -313,8 +347,28 @@ export default function App() {
               <label style={labelStyle}>氏名</label>
               <input style={{ ...inputStyle, marginBottom: 10 }} value={profile.name} onChange={(e) => setProfile((p) => ({ ...p, name: e.target.value }))} />
               <label style={labelStyle}>部署</label>
-              <input style={inputStyle} value={profile.dept} onChange={(e) => setProfile((p) => ({ ...p, dept: e.target.value }))} />
-              <div style={{ fontSize: 11, color: "#A0AEC0", marginTop: 6 }}>新規記録の初期値として使用されます。</div>
+              <input style={{ ...inputStyle, marginBottom: 10 }} value={profile.dept} onChange={(e) => setProfile((p) => ({ ...p, dept: e.target.value }))} />
+              <label style={labelStyle}>护照号码（パスポート番号）</label>
+              <input style={{ ...inputStyle, marginBottom: 10 }} value={profile.passportNo} onChange={(e) => setProfile((p) => ({ ...p, passportNo: e.target.value }))} />
+              <label style={labelStyle}>员工编号</label>
+              <input style={{ ...inputStyle, marginBottom: 10 }} value={profile.employeeId} onChange={(e) => setProfile((p) => ({ ...p, employeeId: e.target.value }))} />
+              <label style={labelStyle}>E-Mail</label>
+              <input style={{ ...inputStyle, marginBottom: 10 }} value={profile.email} onChange={(e) => setProfile((p) => ({ ...p, email: e.target.value }))} />
+              <label style={labelStyle}>海外手机号码</label>
+              <input style={{ ...inputStyle, marginBottom: 10 }} value={profile.overseasMobile} onChange={(e) => setProfile((p) => ({ ...p, overseasMobile: e.target.value }))} />
+              <label style={labelStyle}>国内紧急联络人【亲属】</label>
+              <input
+                style={{ ...inputStyle, marginBottom: 10 }}
+                placeholder="例：+86 13023124293(妻)"
+                value={profile.emergencyContact}
+                onChange={(e) => setProfile((p) => ({ ...p, emergencyContact: e.target.value }))}
+              />
+              <div style={{ fontSize: 11, color: "#A0AEC0", marginBottom: 10 }}>
+                新規記録・出張申請書の初期値として使用されます。「保存」を押すまでは端末に保存されません。
+              </div>
+              <button style={primaryBtn} onClick={saveProfile}>
+                💾 プロフィールを保存
+              </button>
             </div>
 
             <div style={cardStyle}>

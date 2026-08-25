@@ -1,4 +1,5 @@
 import { createWorker } from "tesseract.js";
+import { normalizeCityName } from "./cityNames.js";
 
 const toHalfWidth = (str) => str.replace(/[０-９]/g, (c) => String.fromCharCode(c.charCodeAt(0) - 0xfee0));
 
@@ -114,9 +115,69 @@ export function parseFlightText(rawText) {
   const arrMatch = findNear(ARRIVAL_KEYWORDS);
   const departureTime = depMatch?.value || times[0]?.value || null;
   const arrivalTime = arrMatch && arrMatch !== depMatch ? arrMatch.value : times.find((t) => t.value !== departureTime)?.value || null;
-  const destinationCity = extractDestinationCity(text);
+  const destinationCityRaw = extractDestinationCity(text);
+  const destinationCity = destinationCityRaw ? normalizeCityName(destinationCityRaw) : null;
 
   return { departureTime, arrivalTime, destinationCity, rawText: text };
+}
+
+/**
+ * フライト画面のOCRテキストから便名候補を抽出する。コードシェア表記
+ * （例：MU8631（FM815））の場合は、括弧内の併記番号を除いた主便名を
+ * 優先して1件だけ返す。
+ */
+export function parseFlightNumberText(rawText) {
+  const text = toHalfWidth(rawText || "").toUpperCase();
+  const flightRe = /\b([A-Z]{2,3}\d{2,4}|[A-Z0-9]{2}\d{2,4})\b/g;
+  const candidates = [];
+  let m;
+  while ((m = flightRe.exec(text))) {
+    const before = text.slice(0, m.index);
+    const openCount = (before.match(/\(/g) || []).length;
+    const closeCount = (before.match(/\)/g) || []).length;
+    candidates.push({ value: m[1], insideParens: openCount > closeCount });
+  }
+  const primary = candidates.find((c) => !c.insideParens) || candidates[0] || null;
+  return { flightNumber: primary ? primary.value : null, candidates: candidates.map((c) => c.value), rawText: text };
+}
+
+/**
+ * ホテル予約画面のOCRテキストから、ホテル名候補・チェックイン/チェック
+ * アウト日候補・電話番号候補を抽出する。電話番号はスクショに載っていない
+ * ことが多いため、見つからなければ null（手動入力・公式サイト等での
+ * 確認を前提とする）。
+ */
+export function parseHotelText(rawText) {
+  const text = toHalfWidth(rawText || "");
+
+  const dateMatches = [];
+  const ymdRe = /(20\d{2})[/\-年.](\d{1,2})[/\-月.](\d{1,2})/g;
+  let m;
+  while ((m = ymdRe.exec(text))) {
+    dateMatches.push(`${m[1]}-${String(m[2]).padStart(2, "0")}-${String(m[3]).padStart(2, "0")}`);
+  }
+  if (dateMatches.length < 2) {
+    const mdRe = /(?<!\d)(\d{1,2})[/\-](\d{1,2})(?!\d)/g;
+    const year = new Date().getFullYear();
+    let mm;
+    while ((mm = mdRe.exec(text))) {
+      dateMatches.push(`${year}-${String(mm[1]).padStart(2, "0")}-${String(mm[2]).padStart(2, "0")}`);
+    }
+  }
+  const uniqDates = [...new Set(dateMatches)].sort();
+  const checkIn = uniqDates[0] || null;
+  const checkOut = uniqDates[1] || null;
+
+  const phoneMatch = text.match(/0\d{1,4}-\d{1,4}-\d{3,4}/);
+  const phone = phoneMatch ? phoneMatch[0] : null;
+
+  const hotelName =
+    text
+      .split("\n")
+      .map((l) => l.trim())
+      .find((l) => l.length >= 3 && /[^\d\s.,:\-/]/.test(l)) || "";
+
+  return { hotelName, checkIn, checkOut, phone, rawText: text };
 }
 
 async function runOcr(file, onProgress) {
@@ -154,6 +215,24 @@ export async function recognizeReceipt(file, onProgress) {
 export async function recognizeFlight(file, onProgress) {
   const text = await runOcr(file, onProgress);
   return parseFlightText(text);
+}
+
+/**
+ * フライト画面の画像をOCRし、便名候補を返す。
+ * onProgress(0-100) で読み取り進捗を通知する。
+ */
+export async function recognizeFlightNumber(file, onProgress) {
+  const text = await runOcr(file, onProgress);
+  return parseFlightNumberText(text);
+}
+
+/**
+ * ホテル予約画面の画像をOCRし、ホテル名・チェックイン/アウト日・
+ * 電話番号の候補を返す。onProgress(0-100) で読み取り進捗を通知する。
+ */
+export async function recognizeHotel(file, onProgress) {
+  const text = await runOcr(file, onProgress);
+  return parseHotelText(text);
 }
 
 /**
