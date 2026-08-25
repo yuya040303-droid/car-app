@@ -1,4 +1,6 @@
 import { useState } from "react";
+import ExcelExportView from "./ExcelExportView.jsx";
+import { navBtn, cardStyle, labelStyle, inputStyle, overlay, modal, primaryBtn, ghostBtn } from "./styles.js";
 
 /* ---------------- データ定義 ---------------- */
 const USERS = [
@@ -50,16 +52,6 @@ const emptyForm = () => ({
   items: [],
 });
 const emptyItemDraft = () => ({ type: "transport", desc: "", amount: "" });
-
-/* ---------------- 共通スタイル ---------------- */
-const navBtn = { background: "#fff", border: "1px solid #E2E8F0", borderRadius: 8, padding: "6px 14px", cursor: "pointer", fontSize: 16, color: "#4A5568" };
-const cardStyle = { background: "#fff", borderRadius: 14, padding: "14px", marginBottom: 10, boxShadow: "0 2px 10px rgba(0,0,0,0.06)" };
-const labelStyle = { display: "block", fontSize: 12, color: "#718096", marginBottom: 5, fontWeight: 600 };
-const inputStyle = { width: "100%", padding: "10px 12px", borderRadius: 9, border: "1px solid #E2E8F0", fontSize: 14, background: "#F7FAFC", outline: "none", color: "#2D3748", boxSizing: "border-box" };
-const overlay = { position: "fixed", inset: 0, background: "rgba(0,0,0,0.5)", display: "flex", alignItems: "flex-end", justifyContent: "center", zIndex: 150 };
-const modal = { background: "#fff", borderRadius: "20px 20px 0 0", padding: 20, width: "100%", maxWidth: 480, maxHeight: "86vh", overflowY: "auto", boxSizing: "border-box" };
-const primaryBtn = { background: "linear-gradient(135deg,#1A2980 0%,#26D0CE 100%)", color: "#fff", border: "none", borderRadius: 10, padding: "12px 0", fontSize: 15, fontWeight: 700, cursor: "pointer", width: "100%" };
-const ghostBtn = { background: "#EDF2F7", color: "#4A5568", border: "none", borderRadius: 10, padding: "12px 0", fontSize: 14, fontWeight: 600, cursor: "pointer", width: "100%" };
 
 /* ---------------- サンプルデータ ---------------- */
 const seedReports = () => [
@@ -303,19 +295,21 @@ export default function App() {
       </div>
 
       {/* タブ */}
-      <div style={{ display: "flex", background: "#fff", borderBottom: "1px solid #E2E8F0", position: "sticky", top: 68, zIndex: 99 }}>
+      <div style={{ display: "flex", background: "#fff", borderBottom: "1px solid #E2E8F0", position: "sticky", top: 68, zIndex: 99, overflowX: "auto" }}>
         {[
           { key: "list", label: "📋 一覧" },
           { key: "new", label: "＋ 新規申請" },
           { key: "approval", label: "✅ 承認" },
+          { key: "excel", label: "📄 Excel出力" },
           { key: "settings", label: "⚙ 設定" },
         ].map((tab) => (
           <button
             key={tab.key}
             onClick={() => (tab.key === "new" ? openNewForm() : setView(tab.key))}
             style={{
-              flex: 1,
-              padding: "10px 0",
+              flex: "1 0 auto",
+              minWidth: 72,
+              padding: "10px 4px",
               fontSize: 11,
               fontWeight: view === tab.key ? 700 : 400,
               color: view === tab.key ? "#1A2980" : "#718096",
@@ -323,6 +317,7 @@ export default function App() {
               border: "none",
               cursor: "pointer",
               borderBottom: view === tab.key ? "2px solid #1A2980" : "2px solid transparent",
+              whiteSpace: "nowrap",
             }}
           >
             {tab.label}
@@ -499,6 +494,9 @@ export default function App() {
             )}
           </>
         )}
+
+        {/* ---- Excel出力 ---- */}
+        {view === "excel" && <ExcelExportView currentUser={currentUser} showToast={showToast} />}
 
         {/* ---- 設定 ---- */}
         {view === "settings" && (
