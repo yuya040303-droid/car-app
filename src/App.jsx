@@ -3,14 +3,7 @@ import ExcelExportView from "./ExcelExportView.jsx";
 import { navBtn, cardStyle, labelStyle, inputStyle, overlay, modal, primaryBtn, ghostBtn } from "./styles.js";
 
 /* ---------------- データ定義 ---------------- */
-const USERS = [
-  { name: "田中 太郎", dept: "営業部", role: "employee" },
-  { name: "鈴木 花子", dept: "営業部", role: "employee" },
-  { name: "佐藤 健", dept: "経理部", role: "approver" },
-  { name: "高橋 美咲", dept: "開発部", role: "employee" },
-  { name: "伊藤 浩", dept: "開発部", role: "employee" },
-  { name: "渡辺 由美", dept: "総務部", role: "approver" },
-];
+const DEFAULT_PROFILE = { name: "田中 太郎", dept: "営業部" };
 
 const ITEM_TYPES = [
   { key: "transport", label: "交通費", icon: "🚃" },
@@ -22,9 +15,7 @@ const itemMeta = (key) => ITEM_TYPES.find((t) => t.key === key) || ITEM_TYPES[3]
 
 const STATUS = {
   draft: { label: "下書き", color: "#718096", bg: "#EDF2F7" },
-  submitted: { label: "申請中", color: "#DD6B20", bg: "#FFFAF0" },
-  approved: { label: "承認済み", color: "#2F855A", bg: "#F0FFF4" },
-  rejected: { label: "差戻し", color: "#C53030", bg: "#FFF5F5" },
+  submitted: { label: "提出済み", color: "#DD6B20", bg: "#FFFAF0" },
   paid: { label: "精算済み", color: "#2B6CB0", bg: "#EBF8FF" },
 };
 
@@ -57,7 +48,6 @@ const emptyItemDraft = () => ({ type: "transport", desc: "", amount: "" });
 const seedReports = () => [
   {
     id: uid(),
-    user: "鈴木 花子",
     destination: "大阪支店",
     purpose: "定例営業会議",
     startDate: "2026-08-10",
@@ -68,13 +58,11 @@ const seedReports = () => [
       { id: uid(), type: "allowance", desc: "日当（2日）", amount: 6000 },
     ],
     status: "submitted",
-    comment: "",
     createdAt: "2026-08-09T10:00:00.000Z",
     submittedAt: "2026-08-09T10:05:00.000Z",
   },
   {
     id: uid(),
-    user: "伊藤 浩",
     destination: "福岡センター",
     purpose: "システム導入立会い",
     startDate: "2026-07-20",
@@ -85,12 +73,10 @@ const seedReports = () => [
       { id: uid(), type: "allowance", desc: "日当（3日）", amount: 9000 },
       { id: uid(), type: "other", desc: "会議室利用料", amount: 3000 },
     ],
-    status: "approved",
-    comment: "",
+    status: "paid",
     createdAt: "2026-07-19T09:00:00.000Z",
     submittedAt: "2026-07-19T09:10:00.000Z",
-    decidedAt: "2026-07-19T14:00:00.000Z",
-    decidedBy: "佐藤 健",
+    paidAt: "2026-07-25T14:00:00.000Z",
   },
 ];
 
@@ -104,7 +90,7 @@ function StatusBadge({ status }) {
   );
 }
 
-function ReportCard({ report, onClick, showUser }) {
+function ReportCard({ report, onClick }) {
   const total = itemsTotal(report.items);
   return (
     <div style={{ ...cardStyle, cursor: "pointer" }} onClick={onClick}>
@@ -114,7 +100,6 @@ function ReportCard({ report, onClick, showUser }) {
           <div style={{ fontSize: 12, color: "#718096", marginTop: 2 }}>
             {fmtDate(report.startDate)} 〜 {fmtDate(report.endDate)}
           </div>
-          {showUser && <div style={{ fontSize: 12, color: "#4A5568", marginTop: 2 }}>👤 {report.user}</div>}
           {report.purpose && <div style={{ fontSize: 12, color: "#A0AEC0", marginTop: 4 }}>{report.purpose}</div>}
         </div>
         <StatusBadge status={report.status} />
@@ -129,7 +114,7 @@ function ReportCard({ report, onClick, showUser }) {
 
 /* ---------------- メインアプリ ---------------- */
 export default function App() {
-  const [currentUser, setCurrentUser] = useState(USERS[0]);
+  const [currentUser, setCurrentUser] = useState(DEFAULT_PROFILE);
   const [view, setView] = useState("list");
   const [reports, setReports] = useState(seedReports);
   const [statusFilter, setStatusFilter] = useState("all");
@@ -137,9 +122,6 @@ export default function App() {
   const [itemDraft, setItemDraft] = useState(emptyItemDraft());
   const [editingId, setEditingId] = useState(null);
   const [detailId, setDetailId] = useState(null);
-  const [rejectComment, setRejectComment] = useState("");
-  const [showRejectBox, setShowRejectBox] = useState(false);
-  const [loginOpen, setLoginOpen] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(null);
   const [perDiemRate, setPerDiemRate] = useState(DEFAULT_PER_DIEM_RATE);
   const [toast, setToast] = useState(null);
@@ -149,7 +131,6 @@ export default function App() {
     setTimeout(() => setToast(null), 2800);
   };
 
-  const isApprover = currentUser.role === "approver";
   const detailReport = reports.find((r) => r.id === detailId) || null;
 
   /* ---- フォーム操作 ---- */
@@ -219,19 +200,12 @@ export default function App() {
     const now = new Date().toISOString();
     if (editingId) {
       setReports((prev) =>
-        prev.map((r) =>
-          r.id === editingId
-            ? { ...r, ...form, status, comment: "", submittedAt: status === "submitted" ? now : r.submittedAt, updatedAt: now }
-            : r
-        )
+        prev.map((r) => (r.id === editingId ? { ...r, ...form, status, submittedAt: status === "submitted" ? now : r.submittedAt, updatedAt: now } : r))
       );
     } else {
-      setReports((prev) => [
-        { id: uid(), user: currentUser.name, ...form, status, comment: "", createdAt: now, submittedAt: status === "submitted" ? now : undefined },
-        ...prev,
-      ]);
+      setReports((prev) => [{ id: uid(), ...form, status, createdAt: now, submittedAt: status === "submitted" ? now : undefined }, ...prev]);
     }
-    showToast(status === "submitted" ? "申請を送信しました" : "下書きを保存しました");
+    showToast(status === "submitted" ? "提出済みにしました" : "下書きを保存しました");
     setEditingId(null);
     setView("list");
   };
@@ -240,22 +214,7 @@ export default function App() {
     setReports((prev) => prev.filter((r) => r.id !== id));
     setConfirmDelete(null);
     setDetailId(null);
-    showToast("申請を削除しました", "info");
-  };
-
-  const decide = (id, status) => {
-    const now = new Date().toISOString();
-    setReports((prev) =>
-      prev.map((r) =>
-        r.id === id
-          ? { ...r, status, comment: status === "rejected" ? rejectComment : "", decidedAt: now, decidedBy: currentUser.name }
-          : r
-      )
-    );
-    setShowRejectBox(false);
-    setRejectComment("");
-    setDetailId(null);
-    showToast(status === "approved" ? "承認しました" : "差し戻しました", status === "approved" ? "success" : "info");
+    showToast("記録を削除しました", "info");
   };
 
   const markPaid = (id) => {
@@ -265,16 +224,11 @@ export default function App() {
   };
 
   const myReports = reports
-    .filter((r) => r.user === currentUser.name)
     .filter((r) => statusFilter === "all" || r.status === statusFilter)
     .sort((a, b) => (b.createdAt || "").localeCompare(a.createdAt || ""));
 
-  const pendingApproval = reports.filter((r) => r.status === "submitted").sort((a, b) => (a.submittedAt || "").localeCompare(b.submittedAt || ""));
-  const awaitingPayment = reports.filter((r) => r.status === "approved").sort((a, b) => (a.decidedAt || "").localeCompare(b.decidedAt || ""));
-
   const stats = {
     submitted: reports.filter((r) => r.status === "submitted").length,
-    approved: reports.filter((r) => r.status === "approved").length,
     paidTotal: itemsTotal(reports.filter((r) => r.status === "paid").flatMap((r) => r.items)),
   };
 
@@ -286,10 +240,10 @@ export default function App() {
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
           <div>
             <div style={{ fontSize: 18, fontWeight: 700 }}>🧾 出張旅費精算</div>
-            <div style={{ fontSize: 11, opacity: 0.85 }}>{currentUser.dept} ／ {isApprover ? "承認者" : "一般"}</div>
+            <div style={{ fontSize: 11, opacity: 0.85 }}>{currentUser.name}（{currentUser.dept}）</div>
           </div>
-          <button onClick={() => setLoginOpen(true)} style={{ background: "rgba(255,255,255,0.2)", border: "1px solid rgba(255,255,255,0.4)", borderRadius: 20, padding: "5px 12px", color: "#fff", fontSize: 12, cursor: "pointer" }}>
-            👤 {currentUser.name.split(" ")[0]}
+          <button onClick={() => setView("settings")} style={{ background: "rgba(255,255,255,0.2)", border: "1px solid rgba(255,255,255,0.4)", borderRadius: 20, padding: "5px 12px", color: "#fff", fontSize: 12, cursor: "pointer" }}>
+            ⚙ 設定
           </button>
         </div>
       </div>
@@ -298,8 +252,7 @@ export default function App() {
       <div style={{ display: "flex", background: "#fff", borderBottom: "1px solid #E2E8F0", position: "sticky", top: 68, zIndex: 99, overflowX: "auto" }}>
         {[
           { key: "list", label: "📋 一覧" },
-          { key: "new", label: "＋ 新規申請" },
-          { key: "approval", label: "✅ 承認" },
+          { key: "new", label: "＋ 新規記録" },
           { key: "excel", label: "📄 Excel出力" },
           { key: "settings", label: "⚙ 設定" },
         ].map((tab) => (
@@ -351,9 +304,9 @@ export default function App() {
             </div>
             {myReports.length === 0 ? (
               <div style={{ textAlign: "center", color: "#A0AEC0", padding: "60px 0", fontSize: 13 }}>
-                申請はまだありません。
+                記録はまだありません。
                 <br />
-                「＋ 新規申請」から出張精算を申請しましょう。
+                「＋ 新規記録」から出張精算を記録しましょう。
               </div>
             ) : (
               myReports.map((r) => <ReportCard key={r.id} report={r} onClick={() => setDetailId(r.id)} />)
@@ -460,39 +413,10 @@ export default function App() {
                 下書き保存
               </button>
               <button style={primaryBtn} onClick={() => saveReport("submitted")}>
-                申請する
+                提出する
               </button>
             </div>
           </div>
-        )}
-
-        {/* ---- 承認 ---- */}
-        {view === "approval" && (
-          <>
-            {!isApprover && (
-              <div style={{ ...cardStyle, textAlign: "center", color: "#A0AEC0", fontSize: 13 }}>
-                このアカウントには承認権限がありません。
-                <br />
-                右上の 👤 から承認者アカウントに切り替えてください。
-              </div>
-            )}
-            {isApprover && (
-              <>
-                <div style={{ fontSize: 13, fontWeight: 700, color: "#2D3748", margin: "4px 0 8px" }}>承認待ち（{pendingApproval.length}件）</div>
-                {pendingApproval.length === 0 ? (
-                  <div style={{ color: "#A0AEC0", fontSize: 13, marginBottom: 16 }}>承認待ちの申請はありません。</div>
-                ) : (
-                  pendingApproval.map((r) => <ReportCard key={r.id} report={r} showUser onClick={() => setDetailId(r.id)} />)
-                )}
-                <div style={{ fontSize: 13, fontWeight: 700, color: "#2D3748", margin: "16px 0 8px" }}>承認済み・未精算（{awaitingPayment.length}件）</div>
-                {awaitingPayment.length === 0 ? (
-                  <div style={{ color: "#A0AEC0", fontSize: 13 }}>該当する申請はありません。</div>
-                ) : (
-                  awaitingPayment.map((r) => <ReportCard key={r.id} report={r} showUser onClick={() => setDetailId(r.id)} />)
-                )}
-              </>
-            )}
-          </>
         )}
 
         {/* ---- Excel出力 ---- */}
@@ -501,6 +425,18 @@ export default function App() {
         {/* ---- 設定 ---- */}
         {view === "settings" && (
           <>
+            <div style={cardStyle}>
+              <div style={{ fontWeight: 700, fontSize: 14, marginBottom: 10, color: "#2D3748" }}>プロフィール</div>
+              <label style={labelStyle}>氏名</label>
+              <input
+                style={{ ...inputStyle, marginBottom: 10 }}
+                value={currentUser.name}
+                onChange={(e) => setCurrentUser((u) => ({ ...u, name: e.target.value }))}
+              />
+              <label style={labelStyle}>部署</label>
+              <input style={inputStyle} value={currentUser.dept} onChange={(e) => setCurrentUser((u) => ({ ...u, dept: e.target.value }))} />
+            </div>
+
             <div style={cardStyle}>
               <div style={{ fontWeight: 700, fontSize: 14, marginBottom: 10, color: "#2D3748" }}>日当単価</div>
               <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
@@ -518,27 +454,13 @@ export default function App() {
             <div style={cardStyle}>
               <div style={{ fontWeight: 700, fontSize: 14, marginBottom: 10, color: "#2D3748" }}>サマリー</div>
               <div style={{ display: "flex", justifyContent: "space-between", fontSize: 13, padding: "6px 0", borderBottom: "1px solid #EDF2F7" }}>
-                <span style={{ color: "#718096" }}>承認待ち</span>
+                <span style={{ color: "#718096" }}>提出済み（精算待ち）</span>
                 <span style={{ fontWeight: 700 }}>{stats.submitted} 件</span>
-              </div>
-              <div style={{ display: "flex", justifyContent: "space-between", fontSize: 13, padding: "6px 0", borderBottom: "1px solid #EDF2F7" }}>
-                <span style={{ color: "#718096" }}>精算待ち（承認済み）</span>
-                <span style={{ fontWeight: 700 }}>{stats.approved} 件</span>
               </div>
               <div style={{ display: "flex", justifyContent: "space-between", fontSize: 13, padding: "6px 0" }}>
                 <span style={{ color: "#718096" }}>精算済み合計</span>
                 <span style={{ fontWeight: 700, color: "#1A2980" }}>{fmtYen(stats.paidTotal)}</span>
               </div>
-            </div>
-
-            <div style={cardStyle}>
-              <div style={{ fontWeight: 700, fontSize: 14, marginBottom: 10, color: "#2D3748" }}>メンバー</div>
-              {USERS.map((u) => (
-                <div key={u.name} style={{ display: "flex", justifyContent: "space-between", fontSize: 13, padding: "6px 0", borderBottom: "1px solid #EDF2F7" }}>
-                  <span>{u.name}（{u.dept}）</span>
-                  <span style={{ color: u.role === "approver" ? "#2B6CB0" : "#A0AEC0" }}>{u.role === "approver" ? "承認者" : "一般"}</span>
-                </div>
-              ))}
             </div>
           </>
         )}
@@ -546,7 +468,7 @@ export default function App() {
 
       {/* ---- 詳細モーダル ---- */}
       {detailReport && (
-        <div style={overlay} onClick={() => { setDetailId(null); setShowRejectBox(false); }}>
+        <div style={overlay} onClick={() => setDetailId(null)}>
           <div style={modal} onClick={(e) => e.stopPropagation()}>
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 10 }}>
               <div>
@@ -554,7 +476,6 @@ export default function App() {
                 <div style={{ fontSize: 12, color: "#718096", marginTop: 2 }}>
                   {fmtDate(detailReport.startDate)} 〜 {fmtDate(detailReport.endDate)}（{daysBetween(detailReport.startDate, detailReport.endDate)}日間）
                 </div>
-                <div style={{ fontSize: 12, color: "#4A5568", marginTop: 2 }}>👤 {detailReport.user}</div>
               </div>
               <StatusBadge status={detailReport.status} />
             </div>
@@ -574,70 +495,19 @@ export default function App() {
               <span style={{ fontSize: 18, color: "#1A2980" }}>{fmtYen(itemsTotal(detailReport.items))}</span>
             </div>
 
-            {detailReport.status === "rejected" && detailReport.comment && (
-              <div style={{ marginTop: 12, fontSize: 12, color: "#C53030", background: "#FFF5F5", borderRadius: 8, padding: 8 }}>
-                差戻し理由：{detailReport.comment}
-              </div>
-            )}
-
-            {/* 申請者本人：下書き・差戻し中の操作 */}
-            {detailReport.user === currentUser.name && (detailReport.status === "draft" || detailReport.status === "rejected") && (
-              <div style={{ display: "flex", gap: 10, marginTop: 16 }}>
-                <button style={ghostBtn} onClick={() => setConfirmDelete(detailReport.id)}>
-                  削除
-                </button>
+            <div style={{ display: "flex", gap: 10, marginTop: 16 }}>
+              <button style={ghostBtn} onClick={() => setConfirmDelete(detailReport.id)}>
+                削除
+              </button>
+              {detailReport.status !== "paid" && (
                 <button style={primaryBtn} onClick={() => openEditForm(detailReport)}>
-                  編集して{detailReport.status === "rejected" ? "再申請" : "申請"}
+                  編集する
                 </button>
-              </div>
-            )}
+              )}
+            </div>
 
-            {/* 承認者：申請中の操作 */}
-            {isApprover && detailReport.status === "submitted" && (
-              <div style={{ marginTop: 16 }}>
-                {!showRejectBox ? (
-                  <div style={{ display: "flex", gap: 10 }}>
-                    <button style={ghostBtn} onClick={() => setShowRejectBox(true)}>
-                      差し戻す
-                    </button>
-                    <button style={primaryBtn} onClick={() => decide(detailReport.id, "approved")}>
-                      承認する
-                    </button>
-                  </div>
-                ) : (
-                  <div>
-                    <label style={labelStyle}>差戻し理由</label>
-                    <textarea
-                      style={{ ...inputStyle, minHeight: 60, marginBottom: 10, resize: "vertical" }}
-                      value={rejectComment}
-                      onChange={(e) => setRejectComment(e.target.value)}
-                      placeholder="理由を入力してください"
-                    />
-                    <div style={{ display: "flex", gap: 10 }}>
-                      <button style={ghostBtn} onClick={() => setShowRejectBox(false)}>
-                        キャンセル
-                      </button>
-                      <button
-                        style={{ ...primaryBtn, background: "#C53030" }}
-                        onClick={() => {
-                          if (!rejectComment.trim()) {
-                            showToast("差戻し理由を入力してください", "error");
-                            return;
-                          }
-                          decide(detailReport.id, "rejected");
-                        }}
-                      >
-                        差し戻す
-                      </button>
-                    </div>
-                  </div>
-                )}
-              </div>
-            )}
-
-            {/* 承認者：承認済み→精算処理 */}
-            {isApprover && detailReport.status === "approved" && (
-              <button style={{ ...primaryBtn, marginTop: 16 }} onClick={() => markPaid(detailReport.id)}>
+            {detailReport.status === "submitted" && (
+              <button style={{ ...primaryBtn, marginTop: 10 }} onClick={() => markPaid(detailReport.id)}>
                 精算済みにする
               </button>
             )}
@@ -649,7 +519,7 @@ export default function App() {
       {confirmDelete && (
         <div style={overlay} onClick={() => setConfirmDelete(null)}>
           <div style={{ ...modal, borderRadius: 16, maxWidth: 320 }} onClick={(e) => e.stopPropagation()}>
-            <div style={{ fontSize: 14, color: "#2D3748", marginBottom: 16, textAlign: "center" }}>この申請を削除しますか？</div>
+            <div style={{ fontSize: 14, color: "#2D3748", marginBottom: 16, textAlign: "center" }}>この記録を削除しますか？</div>
             <div style={{ display: "flex", gap: 10 }}>
               <button style={ghostBtn} onClick={() => setConfirmDelete(null)}>
                 キャンセル
@@ -658,41 +528,6 @@ export default function App() {
                 削除する
               </button>
             </div>
-          </div>
-        </div>
-      )}
-
-      {/* ---- ログイン切替 ---- */}
-      {loginOpen && (
-        <div style={overlay} onClick={() => setLoginOpen(false)}>
-          <div style={modal} onClick={(e) => e.stopPropagation()}>
-            <div style={{ fontSize: 15, fontWeight: 700, marginBottom: 12, color: "#2D3748" }}>ユーザーを切り替え</div>
-            {USERS.map((u) => (
-              <button
-                key={u.name}
-                onClick={() => {
-                  setCurrentUser(u);
-                  setLoginOpen(false);
-                  showToast(`${u.name} としてログインしました`, "info");
-                }}
-                style={{
-                  display: "flex",
-                  justifyContent: "space-between",
-                  width: "100%",
-                  padding: "12px 10px",
-                  marginBottom: 6,
-                  borderRadius: 10,
-                  border: u.name === currentUser.name ? "1px solid #1A2980" : "1px solid #E2E8F0",
-                  background: u.name === currentUser.name ? "#EBF4FF" : "#fff",
-                  cursor: "pointer",
-                  fontSize: 13,
-                  color: "#2D3748",
-                }}
-              >
-                <span>{u.name}（{u.dept}）</span>
-                <span style={{ color: u.role === "approver" ? "#2B6CB0" : "#A0AEC0", fontSize: 11 }}>{u.role === "approver" ? "承認者" : "一般"}</span>
-              </button>
-            ))}
           </div>
         </div>
       )}
