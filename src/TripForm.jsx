@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { cardStyle, labelStyle, inputStyle, primaryBtn } from "./styles.js";
+import { cardStyle, labelStyle, inputStyle, primaryBtn, ghostBtn } from "./styles.js";
 import ReceiptUpload from "./ReceiptUpload.jsx";
 import {
   generateTravelExpenseExcel,
@@ -42,16 +42,24 @@ function EntryList({ entries, onRemove, render }) {
   );
 }
 
-export default function ExcelExportView({ currentUser, showToast }) {
-  const [header, setHeader] = useState({ name: currentUser.name, department: "", rateUSD: "", rateJPY: "", rateEUR: "", rateTWD: "" });
-  const [days, setDays] = useState([]);
+/**
+ * 出張の記録フォーム。日別明細の入力から、そのまま提出用Excel
+ * （旅費精算書）を生成できる。記録の保存とExcel生成は別アクション
+ * だが、同じ入力を使い回すため二重入力にはならない。
+ */
+export default function TripForm({ initial, profile, perDiemRate, onSave, onCancel, showToast }) {
+  const [purpose, setPurpose] = useState(initial?.purpose || "");
+  const [header, setHeader] = useState(
+    initial?.header || { name: profile.name, department: profile.dept, rateUSD: "", rateJPY: "", rateEUR: "", rateTWD: "" }
+  );
+  const [days, setDays] = useState(initial?.days || []);
   const [dayDraft, setDayDraft] = useState(emptyDay());
-  const [domesticDays, setDomesticDays] = useState([]);
+  const [domesticDays, setDomesticDays] = useState(initial?.domesticDays || []);
   const [domesticDraft, setDomesticDraft] = useState(emptyDomestic());
   const [showDetail, setShowDetail] = useState(false);
-  const [legs, setLegs] = useState([]);
+  const [legs, setLegs] = useState(initial?.legs || []);
   const [legDraft, setLegDraft] = useState(emptyLeg());
-  const [hotels, setHotels] = useState([]);
+  const [hotels, setHotels] = useState(initial?.hotels || []);
   const [hotelDraft, setHotelDraft] = useState(emptyHotel());
   const [generating, setGenerating] = useState(false);
 
@@ -111,6 +119,15 @@ export default function ExcelExportView({ currentUser, showToast }) {
   };
   const removeHotel = (id) => setHotels((h) => h.filter((x) => x.id !== id));
 
+  const autoAddPerDiem = () => {
+    if (!dayDraft.date) {
+      showToast("日付を入力してください", "error");
+      return;
+    }
+    setDayDraft((d) => ({ ...d, allowance: String(perDiemRate) }));
+    showToast("日当を自動入力しました");
+  };
+
   const sum = (arr, key) => arr.reduce((s, x) => s + Number(x[key] || 0), 0);
   const allowanceTotal = sum(days, "allowance");
   const lodgingTotal = sum(days, "lodging");
@@ -121,13 +138,27 @@ export default function ExcelExportView({ currentUser, showToast }) {
   const domesticCnyTotal = sum(domesticDays, "amount");
   const grandTotal = Math.round((overseasCnyTotal + domesticCnyTotal) * 100) / 100;
 
-  const handleGenerate = async () => {
-    if (!header.name.trim()) {
-      showToast("氏名を入力してください", "error");
+  const buildData = () => ({ purpose, header, days, domesticDays, legs, hotels });
+
+  const validate = () => {
+    if (!header.name.trim()) return "氏名を入力してください";
+    if (days.length === 0 && domesticDays.length === 0) return "出張明細を1件以上追加してください";
+    return null;
+  };
+
+  const handleSave = (status) => {
+    const err = validate();
+    if (err) {
+      showToast(err, "error");
       return;
     }
-    if (days.length === 0 && domesticDays.length === 0) {
-      showToast("出張明細を1件以上追加してください", "error");
+    onSave(status, buildData());
+  };
+
+  const handleGenerate = async () => {
+    const err = validate();
+    if (err) {
+      showToast(err, "error");
       return;
     }
     if (days.length > 0 && !header.rateJPY) {
@@ -159,8 +190,13 @@ export default function ExcelExportView({ currentUser, showToast }) {
     <div>
       <div style={{ ...cardStyle, background: "#EBF8FF" }}>
         <div style={{ fontSize: 12, color: "#2B6CB0", lineHeight: 1.6 }}>
-          社内テンプレート「国外差旅费报销单」に沿って旅費精算書（.xlsx）を生成します。日別の出張明細を入力し、最後に「Excelをダウンロード」を押してください。
+          日別の出張明細を入力すると、そのまま提出用の旅費精算書（.xlsx）を生成できます。
         </div>
+      </div>
+
+      <div style={cardStyle}>
+        <label style={labelStyle}>出張目的（任意・一覧表示用のメモ）</label>
+        <input style={inputStyle} placeholder="例：定例営業会議" value={purpose} onChange={(e) => setPurpose(e.target.value)} />
       </div>
 
       {/* ヘッダー情報 */}
@@ -189,7 +225,7 @@ export default function ExcelExportView({ currentUser, showToast }) {
             <input type="number" step="0.0001" style={{ ...miniInput, marginTop: 3 }} value={header.rateTWD} onChange={(e) => setHeader((h) => ({ ...h, rateTWD: e.target.value }))} />
           </div>
         </div>
-        <div style={{ ...helpText, marginTop: 8, marginBottom: 0 }}>* 人民元換算の合計計算に使用されるのは JPY レートのみです。</div>
+        <div style={{ ...helpText, marginTop: 8, marginBottom: 0 }}>* 人民元換算の合計計算に使用されるのは JPY レートのみです（社内レートを都度入力してください）。</div>
       </div>
 
       {/* 日別出張明細（海外＝日本国内） */}
@@ -221,6 +257,9 @@ export default function ExcelExportView({ currentUser, showToast }) {
               <input type="number" style={miniInput} placeholder="日当(円)" value={dayDraft.allowance} onChange={(e) => setDayDraft((d) => ({ ...d, allowance: e.target.value }))} />
               <input type="number" style={miniInput} placeholder="宿泊費(円)" value={dayDraft.lodging} onChange={(e) => setDayDraft((d) => ({ ...d, lodging: e.target.value }))} />
             </div>
+            <button type="button" onClick={autoAddPerDiem} style={{ fontSize: 11, background: "#EBF8FF", color: "#2B6CB0", border: "none", borderRadius: 8, padding: "6px 10px", cursor: "pointer" }}>
+              💴 日当を設定値（{fmtYen(perDiemRate)}）で自動入力
+            </button>
             <ReceiptUpload
               label="📷 宿泊費の領収書から金額を読み取る"
               showToast={showToast}
@@ -370,9 +409,21 @@ export default function ExcelExportView({ currentUser, showToast }) {
         </div>
       </div>
 
-      <button style={primaryBtn} onClick={handleGenerate} disabled={generating}>
+      <button style={{ ...primaryBtn, background: "#2B6CB0", marginBottom: 10 }} onClick={handleGenerate} disabled={generating}>
         {generating ? "生成中..." : "📥 Excelをダウンロード（旅費精算書）"}
       </button>
+
+      <div style={{ display: "flex", gap: 10 }}>
+        <button style={ghostBtn} onClick={onCancel}>
+          キャンセル
+        </button>
+        <button style={ghostBtn} onClick={() => handleSave("draft")}>
+          下書き保存
+        </button>
+        <button style={primaryBtn} onClick={() => handleSave("submitted")}>
+          提出する
+        </button>
+      </div>
     </div>
   );
 }

@@ -1,17 +1,11 @@
 import { useState } from "react";
-import ExcelExportView from "./ExcelExportView.jsx";
-import { navBtn, cardStyle, labelStyle, inputStyle, overlay, modal, primaryBtn, ghostBtn } from "./styles.js";
+import TripForm from "./TripForm.jsx";
+import { generateTravelExpenseExcel, downloadExcelBuffer } from "./excelTemplate.js";
+import { cardStyle, labelStyle, inputStyle, overlay, modal, primaryBtn, ghostBtn } from "./styles.js";
 
 /* ---------------- データ定義 ---------------- */
 const DEFAULT_PROFILE = { name: "田中 太郎", dept: "営業部" };
-
-const ITEM_TYPES = [
-  { key: "transport", label: "交通費", icon: "🚃" },
-  { key: "lodging", label: "宿泊費", icon: "🏨" },
-  { key: "allowance", label: "日当", icon: "💴" },
-  { key: "other", label: "その他", icon: "📎" },
-];
-const itemMeta = (key) => ITEM_TYPES.find((t) => t.key === key) || ITEM_TYPES[3];
+const DEFAULT_PER_DIEM_RATE = 3000;
 
 const STATUS = {
   draft: { label: "下書き", color: "#718096", bg: "#EDF2F7" },
@@ -19,60 +13,63 @@ const STATUS = {
   paid: { label: "精算済み", color: "#2B6CB0", bg: "#EBF8FF" },
 };
 
-const DEFAULT_PER_DIEM_RATE = 3000;
-
 /* ---------------- ヘルパー ---------------- */
 const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
-const todayStr = () => new Date().toISOString().split("T")[0];
 const fmtDate = (d) => {
+  if (!d) return "";
   const dt = new Date(d + "T00:00:00");
   const days = ["日", "月", "火", "水", "木", "金", "土"];
   return `${dt.getMonth() + 1}/${dt.getDate()}(${days[dt.getDay()]})`;
 };
 const fmtYen = (n) => `¥${Number(n || 0).toLocaleString()}`;
-const daysBetween = (s, e) => {
-  if (!s || !e) return 0;
-  return Math.round((new Date(e + "T00:00:00") - new Date(s + "T00:00:00")) / 86400000) + 1;
+const fmtCny = (n) => `CN¥${Number(n || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+
+const allDates = (trip) => [...(trip.days || []).map((d) => d.date), ...(trip.domesticDays || []).map((d) => d.date)].filter(Boolean).sort();
+const tripDateRange = (trip) => {
+  const dates = allDates(trip);
+  return { start: dates[0] || "", end: dates[dates.length - 1] || "" };
 };
-const itemsTotal = (items) => items.reduce((sum, i) => sum + Number(i.amount || 0), 0);
-const emptyForm = () => ({
-  destination: "",
-  purpose: "",
-  startDate: todayStr(),
-  endDate: todayStr(),
-  items: [],
-});
-const emptyItemDraft = () => ({ type: "transport", desc: "", amount: "" });
+const tripDestination = (trip) => {
+  const cities = [];
+  for (const d of trip.days || []) {
+    if (d.city && cities[cities.length - 1] !== d.city) cities.push(d.city);
+  }
+  return cities.length ? cities.join("・") : "（行先未入力）";
+};
+const tripOverseasTotal = (trip) =>
+  (trip.days || []).reduce((s, d) => s + Number(d.allowance || 0) + Number(d.lodging || 0) + Number(d.transportAmount || 0), 0);
+const tripDomesticTotal = (trip) => (trip.domesticDays || []).reduce((s, d) => s + Number(d.amount || 0), 0);
+const tripEntryCount = (trip) => (trip.days || []).length + (trip.domesticDays || []).length;
 
 /* ---------------- サンプルデータ ---------------- */
-const seedReports = () => [
+const seedTrips = () => [
   {
     id: uid(),
-    destination: "大阪支店",
     purpose: "定例営業会議",
-    startDate: "2026-08-10",
-    endDate: "2026-08-11",
-    items: [
-      { id: uid(), type: "transport", desc: "新幹線（東京⇔新大阪）", amount: 28000 },
-      { id: uid(), type: "lodging", desc: "大阪ステーションホテル 1泊", amount: 12000 },
-      { id: uid(), type: "allowance", desc: "日当（2日）", amount: 6000 },
+    header: { name: DEFAULT_PROFILE.name, department: "1部1課", rateUSD: "", rateJPY: "0.0485", rateEUR: "", rateTWD: "" },
+    days: [
+      { id: uid(), date: "2026-08-10", city: "大阪", allowance: 3000, lodging: 12000, routeText: "東京→新大阪", transportAmount: 28000, remark: "" },
+      { id: uid(), date: "2026-08-11", city: "大阪", allowance: 3000, lodging: 0, routeText: "新大阪→東京", transportAmount: 0, remark: "" },
     ],
+    domesticDays: [],
+    legs: [],
+    hotels: [],
     status: "submitted",
     createdAt: "2026-08-09T10:00:00.000Z",
     submittedAt: "2026-08-09T10:05:00.000Z",
   },
   {
     id: uid(),
-    destination: "福岡センター",
     purpose: "システム導入立会い",
-    startDate: "2026-07-20",
-    endDate: "2026-07-22",
-    items: [
-      { id: uid(), type: "transport", desc: "飛行機（羽田⇔福岡）", amount: 45000 },
-      { id: uid(), type: "lodging", desc: "ビジネスホテル 2泊", amount: 16000 },
-      { id: uid(), type: "allowance", desc: "日当（3日）", amount: 9000 },
-      { id: uid(), type: "other", desc: "会議室利用料", amount: 3000 },
+    header: { name: DEFAULT_PROFILE.name, department: "1部1課", rateUSD: "", rateJPY: "0.0485", rateEUR: "", rateTWD: "" },
+    days: [
+      { id: uid(), date: "2026-07-20", city: "福岡", allowance: 3000, lodging: 8000, routeText: "羽田→福岡", transportAmount: 45000, remark: "" },
+      { id: uid(), date: "2026-07-21", city: "福岡", allowance: 3000, lodging: 8000, routeText: "", transportAmount: 0, remark: "" },
+      { id: uid(), date: "2026-07-22", city: "福岡", allowance: 3000, lodging: 0, routeText: "福岡→羽田", transportAmount: 3000, remark: "会議室利用料含む" },
     ],
+    domesticDays: [],
+    legs: [],
+    hotels: [],
     status: "paid",
     createdAt: "2026-07-19T09:00:00.000Z",
     submittedAt: "2026-07-19T09:10:00.000Z",
@@ -90,23 +87,28 @@ function StatusBadge({ status }) {
   );
 }
 
-function ReportCard({ report, onClick }) {
-  const total = itemsTotal(report.items);
+function TripCard({ trip, onClick }) {
+  const { start, end } = tripDateRange(trip);
+  const jpyTotal = tripOverseasTotal(trip);
+  const cnyTotal = tripDomesticTotal(trip);
   return (
     <div style={{ ...cardStyle, cursor: "pointer" }} onClick={onClick}>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
         <div>
-          <div style={{ fontWeight: 700, fontSize: 15, color: "#2D3748" }}>{report.destination || "（行先未入力）"}</div>
+          <div style={{ fontWeight: 700, fontSize: 15, color: "#2D3748" }}>{tripDestination(trip)}</div>
           <div style={{ fontSize: 12, color: "#718096", marginTop: 2 }}>
-            {fmtDate(report.startDate)} 〜 {fmtDate(report.endDate)}
+            {start ? `${fmtDate(start)} 〜 ${fmtDate(end)}` : "日程未入力"}
           </div>
-          {report.purpose && <div style={{ fontSize: 12, color: "#A0AEC0", marginTop: 4 }}>{report.purpose}</div>}
+          {trip.purpose && <div style={{ fontSize: 12, color: "#A0AEC0", marginTop: 4 }}>{trip.purpose}</div>}
         </div>
-        <StatusBadge status={report.status} />
+        <StatusBadge status={trip.status} />
       </div>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: 10, borderTop: "1px solid #EDF2F7", paddingTop: 8 }}>
-        <span style={{ fontSize: 11, color: "#A0AEC0" }}>{report.items.length}件の明細</span>
-        <span style={{ fontSize: 16, fontWeight: 700, color: "#1A2980" }}>{fmtYen(total)}</span>
+        <span style={{ fontSize: 11, color: "#A0AEC0" }}>{tripEntryCount(trip)}件の明細</span>
+        <span style={{ textAlign: "right" }}>
+          <span style={{ fontSize: 16, fontWeight: 700, color: "#1A2980" }}>{fmtYen(jpyTotal)}</span>
+          {cnyTotal > 0 && <div style={{ fontSize: 11, color: "#718096" }}>+ {fmtCny(cnyTotal)}</div>}
+        </span>
       </div>
     </div>
   );
@@ -114,16 +116,15 @@ function ReportCard({ report, onClick }) {
 
 /* ---------------- メインアプリ ---------------- */
 export default function App() {
-  const [currentUser, setCurrentUser] = useState(DEFAULT_PROFILE);
+  const [profile, setProfile] = useState(DEFAULT_PROFILE);
   const [view, setView] = useState("list");
-  const [reports, setReports] = useState(seedReports);
+  const [trips, setTrips] = useState(seedTrips);
   const [statusFilter, setStatusFilter] = useState("all");
-  const [form, setForm] = useState(emptyForm());
-  const [itemDraft, setItemDraft] = useState(emptyItemDraft());
   const [editingId, setEditingId] = useState(null);
   const [detailId, setDetailId] = useState(null);
   const [confirmDelete, setConfirmDelete] = useState(null);
   const [perDiemRate, setPerDiemRate] = useState(DEFAULT_PER_DIEM_RATE);
+  const [generatingId, setGeneratingId] = useState(null);
   const [toast, setToast] = useState(null);
 
   const showToast = (msg, type = "success") => {
@@ -131,106 +132,85 @@ export default function App() {
     setTimeout(() => setToast(null), 2800);
   };
 
-  const detailReport = reports.find((r) => r.id === detailId) || null;
+  const detailTrip = trips.find((t) => t.id === detailId) || null;
 
-  /* ---- フォーム操作 ---- */
   const openNewForm = () => {
-    setForm(emptyForm());
-    setItemDraft(emptyItemDraft());
     setEditingId(null);
-    setView("new");
+    setView("form");
   };
-
-  const openEditForm = (report) => {
-    setForm({
-      destination: report.destination,
-      purpose: report.purpose,
-      startDate: report.startDate,
-      endDate: report.endDate,
-      items: report.items,
-    });
-    setItemDraft(emptyItemDraft());
-    setEditingId(report.id);
+  const openEditForm = (trip) => {
+    setEditingId(trip.id);
     setDetailId(null);
-    setView("new");
+    setView("form");
   };
 
-  const addItem = () => {
-    if (!itemDraft.desc.trim()) {
-      showToast("明細の内容を入力してください", "error");
-      return;
-    }
-    if (!itemDraft.amount || Number(itemDraft.amount) <= 0) {
-      showToast("金額を正しく入力してください", "error");
-      return;
-    }
-    setForm((f) => ({ ...f, items: [...f.items, { id: uid(), ...itemDraft, amount: Number(itemDraft.amount) }] }));
-    setItemDraft(emptyItemDraft());
-  };
-
-  const removeItem = (id) => setForm((f) => ({ ...f, items: f.items.filter((i) => i.id !== id) }));
-
-  const autoAddPerDiem = () => {
-    const days = daysBetween(form.startDate, form.endDate);
-    if (days <= 0) {
-      showToast("出張期間を正しく入力してください", "error");
-      return;
-    }
-    setForm((f) => ({
-      ...f,
-      items: [...f.items, { id: uid(), type: "allowance", desc: `日当（${days}日）`, amount: days * perDiemRate }],
-    }));
-    showToast("日当を追加しました");
-  };
-
-  const validateForm = () => {
-    if (!form.destination.trim()) return "出張先を入力してください";
-    if (!form.purpose.trim()) return "出張目的を入力してください";
-    if (form.startDate > form.endDate) return "終了日は開始日以降にしてください";
-    if (form.items.length === 0) return "経費明細を1件以上追加してください";
-    return null;
-  };
-
-  const saveReport = (status) => {
-    const err = validateForm();
-    if (err) {
-      showToast(err, "error");
-      return;
-    }
+  const handleSaveTrip = (status, data) => {
     const now = new Date().toISOString();
     if (editingId) {
-      setReports((prev) =>
-        prev.map((r) => (r.id === editingId ? { ...r, ...form, status, submittedAt: status === "submitted" ? now : r.submittedAt, updatedAt: now } : r))
+      setTrips((prev) =>
+        prev.map((t) => (t.id === editingId ? { ...t, ...data, status, submittedAt: status === "submitted" ? now : t.submittedAt, updatedAt: now } : t))
       );
     } else {
-      setReports((prev) => [{ id: uid(), ...form, status, createdAt: now, submittedAt: status === "submitted" ? now : undefined }, ...prev]);
+      setTrips((prev) => [{ id: uid(), ...data, status, createdAt: now, submittedAt: status === "submitted" ? now : undefined }, ...prev]);
     }
     showToast(status === "submitted" ? "提出済みにしました" : "下書きを保存しました");
     setEditingId(null);
     setView("list");
   };
 
-  const deleteReport = (id) => {
-    setReports((prev) => prev.filter((r) => r.id !== id));
+  const deleteTrip = (id) => {
+    setTrips((prev) => prev.filter((t) => t.id !== id));
     setConfirmDelete(null);
     setDetailId(null);
     showToast("記録を削除しました", "info");
   };
 
   const markPaid = (id) => {
-    setReports((prev) => prev.map((r) => (r.id === id ? { ...r, status: "paid", paidAt: new Date().toISOString() } : r)));
+    setTrips((prev) => prev.map((t) => (t.id === id ? { ...t, status: "paid", paidAt: new Date().toISOString() } : t)));
     setDetailId(null);
     showToast("精算済みにしました");
   };
 
-  const myReports = reports
-    .filter((r) => statusFilter === "all" || r.status === statusFilter)
+  const downloadTripExcel = async (trip) => {
+    if (!trip.header?.name?.trim()) {
+      showToast("氏名が未入力です。編集画面で入力してください", "error");
+      return;
+    }
+    if ((trip.days || []).length > 0 && !trip.header?.rateJPY) {
+      showToast("為替レート（1JPY→人民元）が未入力です。編集画面で入力してください", "error");
+      return;
+    }
+    setGeneratingId(trip.id);
+    try {
+      const buffer = await generateTravelExpenseExcel({
+        name: trip.header.name,
+        department: trip.header.department,
+        fxRates: { USD: trip.header.rateUSD, JPY: trip.header.rateJPY, EUR: trip.header.rateEUR, TWD: trip.header.rateTWD },
+        days: trip.days,
+        domesticDays: trip.domesticDays,
+        legs: trip.legs,
+        hotels: trip.hotels,
+      });
+      const { start } = tripDateRange(trip);
+      downloadExcelBuffer(buffer, `旅費精算書_${trip.header.name}_${start || "trip"}.xlsx`);
+      showToast("Excelを生成しました");
+    } catch (e) {
+      showToast(e.message || "Excel生成に失敗しました", "error");
+    } finally {
+      setGeneratingId(null);
+    }
+  };
+
+  const myTrips = trips
+    .filter((t) => statusFilter === "all" || t.status === statusFilter)
     .sort((a, b) => (b.createdAt || "").localeCompare(a.createdAt || ""));
 
   const stats = {
-    submitted: reports.filter((r) => r.status === "submitted").length,
-    paidTotal: itemsTotal(reports.filter((r) => r.status === "paid").flatMap((r) => r.items)),
+    submitted: trips.filter((t) => t.status === "submitted").length,
+    paidTotal: trips.filter((t) => t.status === "paid").reduce((s, t) => s + tripOverseasTotal(t), 0),
   };
+
+  const editingTrip = editingId ? trips.find((t) => t.id === editingId) : null;
 
   /* ---------------- 画面描画 ---------------- */
   return (
@@ -240,7 +220,7 @@ export default function App() {
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
           <div>
             <div style={{ fontSize: 18, fontWeight: 700 }}>🧾 出張旅費精算</div>
-            <div style={{ fontSize: 11, opacity: 0.85 }}>{currentUser.name}（{currentUser.dept}）</div>
+            <div style={{ fontSize: 11, opacity: 0.85 }}>{profile.name}（{profile.dept}）</div>
           </div>
           <button onClick={() => setView("settings")} style={{ background: "rgba(255,255,255,0.2)", border: "1px solid rgba(255,255,255,0.4)", borderRadius: 20, padding: "5px 12px", color: "#fff", fontSize: 12, cursor: "pointer" }}>
             ⚙ 設定
@@ -249,39 +229,40 @@ export default function App() {
       </div>
 
       {/* タブ */}
-      <div style={{ display: "flex", background: "#fff", borderBottom: "1px solid #E2E8F0", position: "sticky", top: 68, zIndex: 99, overflowX: "auto" }}>
-        {[
-          { key: "list", label: "📋 一覧" },
-          { key: "new", label: "＋ 新規記録" },
-          { key: "excel", label: "📄 Excel出力" },
-          { key: "settings", label: "⚙ 設定" },
-        ].map((tab) => (
-          <button
-            key={tab.key}
-            onClick={() => (tab.key === "new" ? openNewForm() : setView(tab.key))}
-            style={{
-              flex: "1 0 auto",
-              minWidth: 72,
-              padding: "10px 4px",
-              fontSize: 11,
-              fontWeight: view === tab.key ? 700 : 400,
-              color: view === tab.key ? "#1A2980" : "#718096",
-              background: "none",
-              border: "none",
-              cursor: "pointer",
-              borderBottom: view === tab.key ? "2px solid #1A2980" : "2px solid transparent",
-              whiteSpace: "nowrap",
-            }}
-          >
-            {tab.label}
-          </button>
-        ))}
-      </div>
+      {view !== "form" && (
+        <div style={{ display: "flex", background: "#fff", borderBottom: "1px solid #E2E8F0", position: "sticky", top: 68, zIndex: 99 }}>
+          {[
+            { key: "list", label: "📋 一覧" },
+            { key: "settings", label: "⚙ 設定" },
+          ].map((tab) => (
+            <button
+              key={tab.key}
+              onClick={() => setView(tab.key)}
+              style={{
+                flex: 1,
+                padding: "10px 0",
+                fontSize: 12,
+                fontWeight: view === tab.key ? 700 : 400,
+                color: view === tab.key ? "#1A2980" : "#718096",
+                background: "none",
+                border: "none",
+                cursor: "pointer",
+                borderBottom: view === tab.key ? "2px solid #1A2980" : "2px solid transparent",
+              }}
+            >
+              {tab.label}
+            </button>
+          ))}
+        </div>
+      )}
 
       <div style={{ padding: 14 }}>
         {/* ---- 一覧 ---- */}
         {view === "list" && (
           <>
+            <button style={{ ...primaryBtn, marginBottom: 14 }} onClick={openNewForm}>
+              ＋ 新規記録（Excel生成もここから）
+            </button>
             <div style={{ display: "flex", gap: 6, overflowX: "auto", marginBottom: 12, paddingBottom: 2 }}>
               {[{ key: "all", label: "すべて" }, ...Object.entries(STATUS).map(([key, v]) => ({ key, label: v.label }))].map((f) => (
                 <button
@@ -302,125 +283,30 @@ export default function App() {
                 </button>
               ))}
             </div>
-            {myReports.length === 0 ? (
+            {myTrips.length === 0 ? (
               <div style={{ textAlign: "center", color: "#A0AEC0", padding: "60px 0", fontSize: 13 }}>
                 記録はまだありません。
                 <br />
                 「＋ 新規記録」から出張精算を記録しましょう。
               </div>
             ) : (
-              myReports.map((r) => <ReportCard key={r.id} report={r} onClick={() => setDetailId(r.id)} />)
+              myTrips.map((t) => <TripCard key={t.id} trip={t} onClick={() => setDetailId(t.id)} />)
             )}
           </>
         )}
 
-        {/* ---- 新規/編集申請フォーム ---- */}
-        {view === "new" && (
-          <div>
-            <div style={cardStyle}>
-              <label style={labelStyle}>出張先</label>
-              <input style={{ ...inputStyle, marginBottom: 10 }} placeholder="例：大阪支店" value={form.destination} onChange={(e) => setForm((f) => ({ ...f, destination: e.target.value }))} />
-              <label style={labelStyle}>出張目的</label>
-              <input style={{ ...inputStyle, marginBottom: 10 }} placeholder="例：定例営業会議" value={form.purpose} onChange={(e) => setForm((f) => ({ ...f, purpose: e.target.value }))} />
-              <div style={{ display: "flex", gap: 10 }}>
-                <div style={{ flex: 1 }}>
-                  <label style={labelStyle}>開始日</label>
-                  <input type="date" style={inputStyle} value={form.startDate} onChange={(e) => setForm((f) => ({ ...f, startDate: e.target.value }))} />
-                </div>
-                <div style={{ flex: 1 }}>
-                  <label style={labelStyle}>終了日</label>
-                  <input type="date" style={inputStyle} value={form.endDate} onChange={(e) => setForm((f) => ({ ...f, endDate: e.target.value }))} />
-                </div>
-              </div>
-            </div>
-
-            <div style={cardStyle}>
-              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
-                <span style={{ fontWeight: 700, fontSize: 14, color: "#2D3748" }}>経費明細</span>
-                <button onClick={autoAddPerDiem} style={{ fontSize: 11, background: "#EBF8FF", color: "#2B6CB0", border: "none", borderRadius: 8, padding: "5px 10px", cursor: "pointer" }}>
-                  💴 日当を自動追加
-                </button>
-              </div>
-
-              {form.items.length > 0 && (
-                <div style={{ marginBottom: 12 }}>
-                  {form.items.map((item) => (
-                    <div key={item.id} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "8px 0", borderBottom: "1px solid #EDF2F7" }}>
-                      <div>
-                        <span style={{ fontSize: 12 }}>
-                          {itemMeta(item.type).icon} {itemMeta(item.type).label}
-                        </span>
-                        <div style={{ fontSize: 13, color: "#2D3748" }}>{item.desc}</div>
-                      </div>
-                      <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                        <span style={{ fontSize: 13, fontWeight: 700, color: "#1A2980" }}>{fmtYen(item.amount)}</span>
-                        <button onClick={() => removeItem(item.id)} style={{ background: "none", border: "none", color: "#C53030", fontSize: 16, cursor: "pointer" }}>
-                          ×
-                        </button>
-                      </div>
-                    </div>
-                  ))}
-                  <div style={{ display: "flex", justifyContent: "space-between", paddingTop: 8, fontWeight: 700 }}>
-                    <span style={{ fontSize: 13, color: "#4A5568" }}>合計</span>
-                    <span style={{ fontSize: 17, color: "#1A2980" }}>{fmtYen(itemsTotal(form.items))}</span>
-                  </div>
-                </div>
-              )}
-
-              <div style={{ background: "#F7FAFC", borderRadius: 10, padding: 10 }}>
-                <div style={{ display: "flex", gap: 6, marginBottom: 8, flexWrap: "wrap" }}>
-                  {ITEM_TYPES.map((t) => (
-                    <button
-                      key={t.key}
-                      onClick={() => setItemDraft((d) => ({ ...d, type: t.key }))}
-                      style={{
-                        fontSize: 11,
-                        padding: "5px 10px",
-                        borderRadius: 20,
-                        border: itemDraft.type === t.key ? "1px solid #1A2980" : "1px solid #E2E8F0",
-                        background: itemDraft.type === t.key ? "#1A2980" : "#fff",
-                        color: itemDraft.type === t.key ? "#fff" : "#4A5568",
-                        cursor: "pointer",
-                      }}
-                    >
-                      {t.icon} {t.label}
-                    </button>
-                  ))}
-                </div>
-                <input
-                  style={{ ...inputStyle, marginBottom: 8, background: "#fff" }}
-                  placeholder="内容（例：東京⇔大阪 新幹線）"
-                  value={itemDraft.desc}
-                  onChange={(e) => setItemDraft((d) => ({ ...d, desc: e.target.value }))}
-                />
-                <div style={{ display: "flex", gap: 8 }}>
-                  <input
-                    type="number"
-                    style={{ ...inputStyle, background: "#fff" }}
-                    placeholder="金額"
-                    value={itemDraft.amount}
-                    onChange={(e) => setItemDraft((d) => ({ ...d, amount: e.target.value }))}
-                  />
-                  <button onClick={addItem} style={{ ...navBtn, background: "#1A2980", color: "#fff", border: "none", flexShrink: 0 }}>
-                    追加
-                  </button>
-                </div>
-              </div>
-            </div>
-
-            <div style={{ display: "flex", gap: 10, marginTop: 6 }}>
-              <button style={ghostBtn} onClick={() => saveReport("draft")}>
-                下書き保存
-              </button>
-              <button style={primaryBtn} onClick={() => saveReport("submitted")}>
-                提出する
-              </button>
-            </div>
-          </div>
+        {/* ---- 新規/編集記録（Excel生成もここで行う） ---- */}
+        {view === "form" && (
+          <TripForm
+            key={editingId || "new"}
+            initial={editingTrip}
+            profile={profile}
+            perDiemRate={perDiemRate}
+            showToast={showToast}
+            onCancel={() => setView(editingId ? "list" : "list")}
+            onSave={handleSaveTrip}
+          />
         )}
-
-        {/* ---- Excel出力 ---- */}
-        {view === "excel" && <ExcelExportView currentUser={currentUser} showToast={showToast} />}
 
         {/* ---- 設定 ---- */}
         {view === "settings" && (
@@ -428,27 +314,19 @@ export default function App() {
             <div style={cardStyle}>
               <div style={{ fontWeight: 700, fontSize: 14, marginBottom: 10, color: "#2D3748" }}>プロフィール</div>
               <label style={labelStyle}>氏名</label>
-              <input
-                style={{ ...inputStyle, marginBottom: 10 }}
-                value={currentUser.name}
-                onChange={(e) => setCurrentUser((u) => ({ ...u, name: e.target.value }))}
-              />
+              <input style={{ ...inputStyle, marginBottom: 10 }} value={profile.name} onChange={(e) => setProfile((p) => ({ ...p, name: e.target.value }))} />
               <label style={labelStyle}>部署</label>
-              <input style={inputStyle} value={currentUser.dept} onChange={(e) => setCurrentUser((u) => ({ ...u, dept: e.target.value }))} />
+              <input style={inputStyle} value={profile.dept} onChange={(e) => setProfile((p) => ({ ...p, dept: e.target.value }))} />
+              <div style={{ fontSize: 11, color: "#A0AEC0", marginTop: 6 }}>新規記録の初期値として使用されます。</div>
             </div>
 
             <div style={cardStyle}>
               <div style={{ fontWeight: 700, fontSize: 14, marginBottom: 10, color: "#2D3748" }}>日当単価</div>
               <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-                <input
-                  type="number"
-                  style={inputStyle}
-                  value={perDiemRate}
-                  onChange={(e) => setPerDiemRate(Number(e.target.value) || 0)}
-                />
+                <input type="number" style={inputStyle} value={perDiemRate} onChange={(e) => setPerDiemRate(Number(e.target.value) || 0)} />
                 <span style={{ fontSize: 13, color: "#718096", flexShrink: 0 }}>円 ／ 日</span>
               </div>
-              <div style={{ fontSize: 11, color: "#A0AEC0", marginTop: 6 }}>「日当を自動追加」ボタンで使用される単価です。</div>
+              <div style={{ fontSize: 11, color: "#A0AEC0", marginTop: 6 }}>記録画面の「日当を自動入力」で使用される単価です。</div>
             </div>
 
             <div style={cardStyle}>
@@ -458,7 +336,7 @@ export default function App() {
                 <span style={{ fontWeight: 700 }}>{stats.submitted} 件</span>
               </div>
               <div style={{ display: "flex", justifyContent: "space-between", fontSize: 13, padding: "6px 0" }}>
-                <span style={{ color: "#718096" }}>精算済み合計</span>
+                <span style={{ color: "#718096" }}>精算済み合計（円・海外分）</span>
                 <span style={{ fontWeight: 700, color: "#1A2980" }}>{fmtYen(stats.paidTotal)}</span>
               </div>
             </div>
@@ -467,47 +345,74 @@ export default function App() {
       </div>
 
       {/* ---- 詳細モーダル ---- */}
-      {detailReport && (
+      {detailTrip && (
         <div style={overlay} onClick={() => setDetailId(null)}>
           <div style={modal} onClick={(e) => e.stopPropagation()}>
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 10 }}>
               <div>
-                <div style={{ fontSize: 17, fontWeight: 700, color: "#2D3748" }}>{detailReport.destination}</div>
+                <div style={{ fontSize: 17, fontWeight: 700, color: "#2D3748" }}>{tripDestination(detailTrip)}</div>
                 <div style={{ fontSize: 12, color: "#718096", marginTop: 2 }}>
-                  {fmtDate(detailReport.startDate)} 〜 {fmtDate(detailReport.endDate)}（{daysBetween(detailReport.startDate, detailReport.endDate)}日間）
+                  {(() => {
+                    const { start, end } = tripDateRange(detailTrip);
+                    return start ? `${fmtDate(start)} 〜 ${fmtDate(end)}` : "日程未入力";
+                  })()}
                 </div>
               </div>
-              <StatusBadge status={detailReport.status} />
+              <StatusBadge status={detailTrip.status} />
             </div>
-            {detailReport.purpose && <div style={{ fontSize: 13, color: "#4A5568", background: "#F7FAFC", borderRadius: 8, padding: 8, marginBottom: 12 }}>{detailReport.purpose}</div>}
+            {detailTrip.purpose && <div style={{ fontSize: 13, color: "#4A5568", background: "#F7FAFC", borderRadius: 8, padding: 8, marginBottom: 12 }}>{detailTrip.purpose}</div>}
 
-            <div style={{ fontSize: 13, fontWeight: 700, color: "#2D3748", marginBottom: 6 }}>経費明細</div>
-            {detailReport.items.map((item) => (
-              <div key={item.id} style={{ display: "flex", justifyContent: "space-between", padding: "7px 0", borderBottom: "1px solid #EDF2F7" }}>
-                <span style={{ fontSize: 13, color: "#4A5568" }}>
-                  {itemMeta(item.type).icon} {item.desc}
-                </span>
-                <span style={{ fontSize: 13, fontWeight: 700 }}>{fmtYen(item.amount)}</span>
-              </div>
-            ))}
+            {(detailTrip.days || []).length > 0 && (
+              <>
+                <div style={{ fontSize: 13, fontWeight: 700, color: "#2D3748", marginBottom: 6 }}>日別明細（海外）</div>
+                {detailTrip.days.map((d) => (
+                  <div key={d.id} style={{ padding: "7px 0", borderBottom: "1px solid #EDF2F7" }}>
+                    <div style={{ display: "flex", justifyContent: "space-between", fontSize: 13, color: "#4A5568" }}>
+                      <span>{fmtDate(d.date)} {d.city}</span>
+                      <span style={{ fontWeight: 700 }}>{fmtYen(Number(d.allowance || 0) + Number(d.lodging || 0) + Number(d.transportAmount || 0))}</span>
+                    </div>
+                    {(d.routeText || d.remark) && (
+                      <div style={{ fontSize: 11, color: "#A0AEC0" }}>{[d.routeText, d.remark].filter(Boolean).join(" ／ ")}</div>
+                    )}
+                  </div>
+                ))}
+              </>
+            )}
+
+            {(detailTrip.domesticDays || []).length > 0 && (
+              <>
+                <div style={{ fontSize: 13, fontWeight: 700, color: "#2D3748", margin: "10px 0 6px" }}>国内（中国国内）出張費</div>
+                {detailTrip.domesticDays.map((d) => (
+                  <div key={d.id} style={{ display: "flex", justifyContent: "space-between", padding: "7px 0", borderBottom: "1px solid #EDF2F7", fontSize: 13, color: "#4A5568" }}>
+                    <span>{fmtDate(d.date)} {d.location}／{d.method}</span>
+                    <span style={{ fontWeight: 700 }}>{fmtCny(d.amount)}</span>
+                  </div>
+                ))}
+              </>
+            )}
+
             <div style={{ display: "flex", justifyContent: "space-between", paddingTop: 10, fontWeight: 700 }}>
-              <span style={{ color: "#4A5568" }}>合計金額</span>
-              <span style={{ fontSize: 18, color: "#1A2980" }}>{fmtYen(itemsTotal(detailReport.items))}</span>
+              <span style={{ color: "#4A5568" }}>合計金額（円・海外分）</span>
+              <span style={{ fontSize: 18, color: "#1A2980" }}>{fmtYen(tripOverseasTotal(detailTrip))}</span>
             </div>
 
-            <div style={{ display: "flex", gap: 10, marginTop: 16 }}>
-              <button style={ghostBtn} onClick={() => setConfirmDelete(detailReport.id)}>
+            <button style={{ ...primaryBtn, background: "#2B6CB0", marginTop: 16 }} onClick={() => downloadTripExcel(detailTrip)} disabled={generatingId === detailTrip.id}>
+              {generatingId === detailTrip.id ? "生成中..." : "📥 Excelをダウンロード（旅費精算書）"}
+            </button>
+
+            <div style={{ display: "flex", gap: 10, marginTop: 10 }}>
+              <button style={ghostBtn} onClick={() => setConfirmDelete(detailTrip.id)}>
                 削除
               </button>
-              {detailReport.status !== "paid" && (
-                <button style={primaryBtn} onClick={() => openEditForm(detailReport)}>
+              {detailTrip.status !== "paid" && (
+                <button style={ghostBtn} onClick={() => openEditForm(detailTrip)}>
                   編集する
                 </button>
               )}
             </div>
 
-            {detailReport.status === "submitted" && (
-              <button style={{ ...primaryBtn, marginTop: 10 }} onClick={() => markPaid(detailReport.id)}>
+            {detailTrip.status === "submitted" && (
+              <button style={{ ...primaryBtn, marginTop: 10 }} onClick={() => markPaid(detailTrip.id)}>
                 精算済みにする
               </button>
             )}
@@ -524,7 +429,7 @@ export default function App() {
               <button style={ghostBtn} onClick={() => setConfirmDelete(null)}>
                 キャンセル
               </button>
-              <button style={{ ...primaryBtn, background: "#C53030" }} onClick={() => deleteReport(confirmDelete)}>
+              <button style={{ ...primaryBtn, background: "#C53030" }} onClick={() => deleteTrip(confirmDelete)}>
                 削除する
               </button>
             </div>
