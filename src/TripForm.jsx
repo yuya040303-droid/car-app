@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { cardStyle, labelStyle, inputStyle, primaryBtn, ghostBtn } from "./styles.js";
 import ReceiptUpload from "./ReceiptUpload.jsx";
-import { recognizeFlight } from "./receiptOcr.js";
+import { recognizeFlight, recognizeRawText } from "./receiptOcr.js";
 import { calcJapanDailyAllowances, calcKoreaDailyAllowances } from "./perDiemRules.js";
 import {
   generateTravelExpenseExcel,
@@ -22,7 +22,7 @@ const emptyDomestic = () => ({ date: todayStr(), location: "", method: "", amoun
 const emptyLeg = () => ({ date: todayStr(), from: "", to: "", amount: "", method: "", memo: "" });
 const emptyHotel = () => ({ period: "", hotelName: "", amount: "" });
 const emptyFlightSettings = () => ({
-  country: "japan",
+  country: "日本",
   rank: "general",
   startDate: todayStr(),
   endDate: todayStr(),
@@ -31,6 +31,8 @@ const emptyFlightSettings = () => ({
   defaultCity: "",
   excludeWeekend: false,
 });
+
+const isKoreaCountry = (text) => /韓国|korea/i.test(String(text || "").trim());
 
 const normalizeDate = (raw) => {
   const s = String(raw || "").trim();
@@ -152,7 +154,7 @@ export default function TripForm({ initial, profile, perDiemRate, onSave, onCanc
       showToast("終了日は開始日以降にしてください", "error");
       return;
     }
-    if (flightSettings.country === "korea") {
+    if (isKoreaCountry(flightSettings.country)) {
       const calc = calcKoreaDailyAllowances({
         startDate: flightSettings.startDate,
         endDate: flightSettings.endDate,
@@ -363,14 +365,12 @@ export default function TripForm({ initial, profile, perDiemRate, onSave, onCanc
         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginBottom: 8 }}>
           <div>
             <span style={{ fontSize: 11, color: "#718096" }}>国</span>
-            <select
+            <input
               style={{ ...miniInput, marginTop: 3 }}
+              placeholder="例：日本"
               value={flightSettings.country}
               onChange={(e) => setFlightSettings((f) => ({ ...f, country: e.target.value }))}
-            >
-              <option value="japan">日本</option>
-              <option value="korea">韓国（Excel未対応・参考値のみ）</option>
-            </select>
+            />
           </div>
           <div>
             <span style={{ fontSize: 11, color: "#718096" }}>役職区分</span>
@@ -387,7 +387,7 @@ export default function TripForm({ initial, profile, perDiemRate, onSave, onCanc
             <input type="date" style={{ ...miniInput, marginTop: 3 }} value={flightSettings.endDate} onChange={(e) => setFlightSettings((f) => ({ ...f, endDate: e.target.value }))} />
           </div>
         </div>
-        {flightSettings.country === "japan" && (
+        {!isKoreaCountry(flightSettings.country) && (
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginBottom: 8 }}>
             <div>
               <span style={{ fontSize: 11, color: "#718096" }}>出発時刻（出発日の判定に使用）</span>
@@ -435,7 +435,7 @@ export default function TripForm({ initial, profile, perDiemRate, onSave, onCanc
           土日は手当を対象外にする
         </label>
         <button type="button" onClick={applyAutoAllowance} style={{ ...smallBtn, width: "100%" }}>
-          🧮 {flightSettings.country === "korea" ? "手当を参考計算する（USD・反映不可）" : "手当を自動計算して日別明細に反映"}
+          🧮 {isKoreaCountry(flightSettings.country) ? "手当を参考計算する（USD・反映不可）" : "手当を自動計算して日別明細に反映"}
         </button>
         {koreaPreview && (
           <div style={{ marginTop: 10, background: "#FFFAF0", borderRadius: 8, padding: 8 }}>
@@ -456,8 +456,18 @@ export default function TripForm({ initial, profile, perDiemRate, onSave, onCanc
         <div style={helpText}>
           「日付,種別,区間,金額」の形式で1行1件貼り付けてください（カンマまたはタブ区切り）。種別に「物販」を含む行は交通費から自動的に除外されます。
         </div>
+        <ReceiptUpload
+          label="📷 IC明細の画像から読み込む（OCR結果を下欄に追加・要編集）"
+          showToast={showToast}
+          recognize={recognizeRawText}
+          describeResult={() => "OCRテキストを貼り付け欄に追加しました"}
+          onExtracted={(r) => setIcText((t) => (t ? `${t}\n${r.rawText}` : r.rawText))}
+        />
+        <div style={{ ...helpText, marginTop: 6, marginBottom: 0 }}>
+          OCRはそのままでは「日付,種別,区間,金額」の形式になりません。読み取り結果を確認し、必要な行だけ整形してから取り込んでください。
+        </div>
         <textarea
-          style={{ ...inputStyle, minHeight: 90, marginBottom: 8, resize: "vertical", fontFamily: "monospace", fontSize: 12 }}
+          style={{ ...inputStyle, minHeight: 90, margin: "8px 0", resize: "vertical", fontFamily: "monospace", fontSize: 12 }}
           placeholder={"2026-07-21,乗車,新大阪→岐阜羽島,970\n2026-07-21,物販,コンビニ,350"}
           value={icText}
           onChange={(e) => setIcText(e.target.value)}
@@ -467,9 +477,9 @@ export default function TripForm({ initial, profile, perDiemRate, onSave, onCanc
         </button>
       </div>
 
-      {/* 日別出張明細（海外＝日本国内） */}
+      {/* 日別出張明細（海外出張分） */}
       <div style={cardStyle}>
-        <div style={sectionTitle}>日別出張明細（海外＝日本国内）</div>
+        <div style={sectionTitle}>日別出張明細（海外出張分）</div>
         <div style={helpText}>最大{OVERSEAS_ROW_CAPACITY}日分。日付・訪問都市（城市）・日当・宿泊費・交通費・備考を入力します。</div>
         <EntryList
           entries={days}

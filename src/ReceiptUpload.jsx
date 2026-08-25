@@ -40,7 +40,8 @@ export default function ReceiptUpload({
 
   return (
     <>
-      <input ref={inputRef} type="file" accept="image/*" capture="environment" style={{ display: "none" }} onChange={handleFile} />
+      {/* capture属性を付けないことで、カメラ起動を強制せずカメラロール（写真ライブラリ）から選択できるようにする */}
+      <input ref={inputRef} type="file" accept="image/*" style={{ display: "none" }} onChange={handleFile} />
       <button
         type="button"
         onClick={() => inputRef.current?.click()}

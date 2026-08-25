@@ -136,3 +136,12 @@ export async function recognizeFlight(file, onProgress) {
   const text = await runOcr(file, onProgress);
   return parseFlightText(text);
 }
+
+/**
+ * IC明細等、構造化パーサーを持たない画像をOCRし、認識結果のテキストを
+ * そのまま返す。呼び出し側で貼り付け欄に反映し、利用者が整形する想定。
+ */
+export async function recognizeRawText(file, onProgress) {
+  const text = await runOcr(file, onProgress);
+  return { rawText: text };
+}
