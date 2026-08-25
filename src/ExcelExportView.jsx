@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { cardStyle, labelStyle, inputStyle, primaryBtn } from "./styles.js";
+import ReceiptUpload from "./ReceiptUpload.jsx";
 import {
   generateTravelExpenseExcel,
   downloadExcelBuffer,
@@ -220,8 +221,18 @@ export default function ExcelExportView({ currentUser, showToast }) {
               <input type="number" style={miniInput} placeholder="日当(円)" value={dayDraft.allowance} onChange={(e) => setDayDraft((d) => ({ ...d, allowance: e.target.value }))} />
               <input type="number" style={miniInput} placeholder="宿泊費(円)" value={dayDraft.lodging} onChange={(e) => setDayDraft((d) => ({ ...d, lodging: e.target.value }))} />
             </div>
+            <ReceiptUpload
+              label="📷 宿泊費の領収書から金額を読み取る"
+              showToast={showToast}
+              onExtracted={(r) => setDayDraft((d) => ({ ...d, lodging: r.amount != null ? String(r.amount) : d.lodging }))}
+            />
             <input style={miniInput} placeholder="乗降地・経路（例：新大阪→岐阜羽島）" value={dayDraft.routeText} onChange={(e) => setDayDraft((d) => ({ ...d, routeText: e.target.value }))} />
             <input type="number" style={miniInput} placeholder="交通費(円)" value={dayDraft.transportAmount} onChange={(e) => setDayDraft((d) => ({ ...d, transportAmount: e.target.value }))} />
+            <ReceiptUpload
+              label="📷 タクシー等の領収書から金額を読み取る"
+              showToast={showToast}
+              onExtracted={(r) => setDayDraft((d) => ({ ...d, transportAmount: r.amount != null ? String(r.amount) : d.transportAmount }))}
+            />
             <input style={miniInput} placeholder="備考" value={dayDraft.remark} onChange={(e) => setDayDraft((d) => ({ ...d, remark: e.target.value }))} />
           </div>
           <button onClick={addDay} style={{ ...smallBtn, width: "100%" }}>
@@ -285,6 +296,18 @@ export default function ExcelExportView({ currentUser, showToast }) {
                   <input style={miniInput} placeholder="手段" value={legDraft.method} onChange={(e) => setLegDraft((d) => ({ ...d, method: e.target.value }))} />
                 </div>
                 <input style={miniInput} placeholder="メモ" value={legDraft.memo} onChange={(e) => setLegDraft((d) => ({ ...d, memo: e.target.value }))} />
+                <ReceiptUpload
+                  label="📷 タクシー領収書・交通明細から読み取る"
+                  showToast={showToast}
+                  onExtracted={(r) =>
+                    setLegDraft((d) => ({
+                      ...d,
+                      amount: r.amount != null ? String(r.amount) : d.amount,
+                      date: r.date || d.date,
+                      memo: d.memo || r.memo,
+                    }))
+                  }
+                />
               </div>
               <button onClick={addLeg} style={{ ...smallBtn, width: "100%" }}>
                 ＋ 交通費内訳を追加
@@ -306,6 +329,17 @@ export default function ExcelExportView({ currentUser, showToast }) {
                 <input style={miniInput} placeholder="期間（例：7/21-22）" value={hotelDraft.period} onChange={(e) => setHotelDraft((d) => ({ ...d, period: e.target.value }))} />
                 <input style={miniInput} placeholder="ホテル名" value={hotelDraft.hotelName} onChange={(e) => setHotelDraft((d) => ({ ...d, hotelName: e.target.value }))} />
                 <input type="number" style={miniInput} placeholder="金額(円)" value={hotelDraft.amount} onChange={(e) => setHotelDraft((d) => ({ ...d, amount: e.target.value }))} />
+                <ReceiptUpload
+                  label="📷 ホテル領収書から読み取る"
+                  showToast={showToast}
+                  onExtracted={(r) =>
+                    setHotelDraft((d) => ({
+                      ...d,
+                      amount: r.amount != null ? String(r.amount) : d.amount,
+                      hotelName: d.hotelName || r.memo,
+                    }))
+                  }
+                />
               </div>
               <button onClick={addHotel} style={{ ...smallBtn, width: "100%" }}>
                 ＋ 宿泊内訳を追加
