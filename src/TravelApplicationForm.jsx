@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { cardStyle, labelStyle, inputStyle, primaryBtn } from "./styles.js";
 import ReceiptUpload from "./ReceiptUpload.jsx";
-import { recognizeFlightNumber, recognizeHotel } from "./receiptOcr.js";
+import { recognizeFlightNumber, recognizeRoundTripFlight, recognizeHotel } from "./receiptOcr.js";
 import { normalizeCityName } from "./cityNames.js";
 import { generateTravelApplicationExcel, downloadExcelBuffer, HOTEL_ROW_CAPACITY } from "./travelApplicationTemplate.js";
 
@@ -159,10 +159,22 @@ export default function TravelApplicationForm({ profile, showToast, onOpenSettin
       <div style={cardStyle}>
         <div style={sectionTitle}>フライト</div>
         <div style={helpText}>コードシェア便の場合は主便名のみが読み取られます（併記番号は使用しません）。</div>
-        <label style={labelStyle}>去程航班名称</label>
+        <ReceiptUpload
+          label="📷 フライト画面から往復の便名をまとめて読み取る"
+          showToast={showToast}
+          recognize={recognizeRoundTripFlight}
+          describeResult={(r) => [r.outboundFlight && `去程:${r.outboundFlight}`, r.returnFlight && `回程:${r.returnFlight}`].filter(Boolean).join("／") || null}
+          onExtracted={(r) => {
+            if (r.outboundFlight) setOutboundFlight(r.outboundFlight);
+            if (r.returnFlight) setReturnFlight(r.returnFlight);
+          }}
+        />
+        <div style={{ ...helpText, marginTop: 6 }}>去程・返程が1枚に写ったスクショなら、この1回のアップロードで両方の便名欄に自動入力されます。</div>
+
+        <label style={{ ...labelStyle, marginTop: 6 }}>去程航班名称</label>
         <input style={{ ...inputStyle, marginBottom: 6 }} placeholder="例：MU225" value={outboundFlight} onChange={(e) => setOutboundFlight(e.target.value.toUpperCase())} />
         <ReceiptUpload
-          label="📷 去程フライト画面から便名を読み取る"
+          label="📷 去程フライト画面のみから読み取る"
           showToast={showToast}
           recognize={recognizeFlightNumber}
           describeResult={(r) => (r.flightNumber ? `便名候補：${r.flightNumber}` : null)}
@@ -173,7 +185,7 @@ export default function TravelApplicationForm({ profile, showToast, onOpenSettin
         <label style={labelStyle}>回程航班名称</label>
         <input style={{ ...inputStyle, marginBottom: 6 }} placeholder="例：MU730" value={returnFlight} onChange={(e) => setReturnFlight(e.target.value.toUpperCase())} />
         <ReceiptUpload
-          label="📷 回程フライト画面から便名を読み取る"
+          label="📷 回程フライト画面のみから読み取る"
           showToast={showToast}
           recognize={recognizeFlightNumber}
           describeResult={(r) => (r.flightNumber ? `便名候補：${r.flightNumber}` : null)}

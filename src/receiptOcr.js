@@ -121,6 +121,26 @@ export function parseFlightText(rawText) {
   return { departureTime, arrivalTime, destinationCity, rawText: text };
 }
 
+function extractFlightCandidates(text) {
+  // 数字部分は2〜5桁まで許容し、5桁の場合は末尾1桁をOCRノイズとみなして
+  // 先頭4桁のみ採用する（実在の便名は通常2〜4桁のため）。
+  const flightRe = /\b([A-Z]{2,3}|[A-Z0-9]{2})(\d{2,5})\b/g;
+  const candidates = [];
+  let m;
+  while ((m = flightRe.exec(text))) {
+    const digits = m[2].length === 5 ? m[2].slice(0, 4) : m[2];
+    const value = `${m[1]}${digits}`;
+    const before = text.slice(0, m.index);
+    const openCount = (before.match(/\(/g) || []).length;
+    const closeCount = (before.match(/\)/g) || []).length;
+    candidates.push({ value, index: m.index, insideParens: openCount > closeCount, letterLed: /^[A-Z]/.test(value) });
+  }
+  // 数字始まり（例：バッテリー残量や画面上の無関係な数値をOCRで誤検出したもの）
+  // より、航空会社コード（英字始まり）の候補を優先する。英字始まりの候補が
+  // 1件でもあれば、数字始まりの候補は除外する。
+  return candidates.some((c) => c.letterLed) ? candidates.filter((c) => c.letterLed) : candidates;
+}
+
 /**
  * フライト画面のOCRテキストから便名候補を抽出する。コードシェア表記
  * （例：MU8631（FM815））の場合は、括弧内の併記番号を除いた主便名を
@@ -128,17 +148,59 @@ export function parseFlightText(rawText) {
  */
 export function parseFlightNumberText(rawText) {
   const text = toHalfWidth(rawText || "").toUpperCase();
-  const flightRe = /\b([A-Z]{2,3}\d{2,4}|[A-Z0-9]{2}\d{2,4})\b/g;
-  const candidates = [];
-  let m;
-  while ((m = flightRe.exec(text))) {
-    const before = text.slice(0, m.index);
-    const openCount = (before.match(/\(/g) || []).length;
-    const closeCount = (before.match(/\)/g) || []).length;
-    candidates.push({ value: m[1], insideParens: openCount > closeCount });
-  }
+  const candidates = extractFlightCandidates(text);
   const primary = candidates.find((c) => !c.insideParens) || candidates[0] || null;
   return { flightNumber: primary ? primary.value : null, candidates: candidates.map((c) => c.value), rawText: text };
+}
+
+const OUTBOUND_KEYWORDS = ["去程", "去程航班", "出発便", "OUTBOUND", "DEPARTING FLIGHT"];
+const RETURN_KEYWORDS = ["返程", "回程", "回程航班", "帰国便", "帰り便", "RETURN", "INBOUND"];
+
+/**
+ * 去程（往路）・返程（復路）の両方が写った1枚のフライト画面から、
+ * それぞれの便名を1回のOCRで読み取る。「去程」「返程/回程」等の
+ * セクション見出しの直後に現れる主便名（コードシェアの併記は除く）を
+ * それぞれ採用する。見出しが見つからない場合は、検出順に1件目を
+ * 往路、往路と異なる2件目を復路の候補として扱う。
+ */
+export function parseRoundTripFlightText(rawText) {
+  const text = toHalfWidth(rawText || "").toUpperCase();
+  const candidates = extractFlightCandidates(text);
+
+  const firstIndexOf = (keywords) => {
+    let best = Infinity;
+    for (const kw of keywords) {
+      const idx = text.indexOf(kw.toUpperCase());
+      if (idx !== -1 && idx < best) best = idx;
+    }
+    return best === Infinity ? null : best;
+  };
+
+  const outboundAt = firstIndexOf(OUTBOUND_KEYWORDS);
+  const returnAt = firstIndexOf(RETURN_KEYWORDS);
+
+  const pickAfter = (startIdx, endIdx) =>
+    candidates.find((c) => !c.insideParens && c.index > startIdx && (endIdx === null || c.index < endIdx)) || null;
+
+  let outboundFlight = null;
+  let returnFlight = null;
+
+  if (outboundAt !== null || returnAt !== null) {
+    if (outboundAt !== null) {
+      const sectionEnd = returnAt !== null && returnAt > outboundAt ? returnAt : null;
+      outboundFlight = pickAfter(outboundAt, sectionEnd)?.value || null;
+    }
+    if (returnAt !== null) {
+      const sectionEnd = outboundAt !== null && outboundAt > returnAt ? outboundAt : null;
+      returnFlight = pickAfter(returnAt, sectionEnd)?.value || null;
+    }
+  } else {
+    const nonParens = candidates.filter((c) => !c.insideParens);
+    outboundFlight = nonParens[0]?.value || null;
+    returnFlight = nonParens.find((c) => c.value !== outboundFlight)?.value || null;
+  }
+
+  return { outboundFlight, returnFlight, candidates: candidates.map((c) => c.value), rawText: text };
 }
 
 /**
@@ -180,8 +242,33 @@ export function parseHotelText(rawText) {
   return { hotelName, checkIn, checkOut, phone, rawText: text };
 }
 
+/**
+ * OCR前に画像を拡大する。スマホのスクリーンショットに含まれる小さな
+ * 文字は解像度不足で認識精度が落ちやすいため、単純な拡大のみ行う
+ * （グレースケール化・コントラスト強調は、色付きバッジ等でかえって
+ * 文字が潰れるケースがあり採用しない）。失敗時は元のファイルを返す。
+ */
+async function preprocessImage(file) {
+  try {
+    const bitmap = await createImageBitmap(file);
+    if (bitmap.width >= 1600) return file;
+    const scale = 2;
+    const canvas = document.createElement("canvas");
+    canvas.width = bitmap.width * scale;
+    canvas.height = bitmap.height * scale;
+    const ctx = canvas.getContext("2d");
+    ctx.imageSmoothingEnabled = true;
+    ctx.imageSmoothingQuality = "high";
+    ctx.drawImage(bitmap, 0, 0, canvas.width, canvas.height);
+    const blob = await new Promise((resolve) => canvas.toBlob(resolve, "image/png"));
+    return blob || file;
+  } catch {
+    return file;
+  }
+}
+
 async function runOcr(file, onProgress) {
-  const worker = await createWorker("jpn+eng", 1, {
+  const worker = await createWorker("jpn+eng+chi_sim", 1, {
     workerPath: "/worker.min.js",
     corePath: "/tesseract-core/",
     langPath: "/tessdata/",
@@ -190,9 +277,10 @@ async function runOcr(file, onProgress) {
     },
   });
   try {
+    const processed = await preprocessImage(file);
     const {
       data: { text },
-    } = await worker.recognize(file);
+    } = await worker.recognize(processed);
     return text;
   } finally {
     await worker.terminate();
@@ -224,6 +312,15 @@ export async function recognizeFlight(file, onProgress) {
 export async function recognizeFlightNumber(file, onProgress) {
   const text = await runOcr(file, onProgress);
   return parseFlightNumberText(text);
+}
+
+/**
+ * 去程・返程が1枚に写ったフライト画面画像をOCRし、往路・復路それぞれの
+ * 便名候補を返す。onProgress(0-100) で読み取り進捗を通知する。
+ */
+export async function recognizeRoundTripFlight(file, onProgress) {
+  const text = await runOcr(file, onProgress);
+  return parseRoundTripFlightText(text);
 }
 
 /**
