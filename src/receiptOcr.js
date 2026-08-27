@@ -256,14 +256,67 @@ export function parseRoundTripFlightText(rawText) {
  * ことが多いため、見つからなければ null（手動入力・公式サイト等での
  * 確認を前提とする）。
  */
-export function parseHotelText(rawText) {
-  const text = toHalfWidth(rawText || "");
+// ホテル予約アプリのUIによく出る、ホテル名ではない定型文言。
+// 「酒店」を含む行でもこれらに一致する場合は候補から除外する。
+const HOTEL_NAME_BLOCKLIST = [
+  "订单", "客服", "分享", "详情", "发消息", "电话", "邮件", "位置", "设施",
+  "接送", "咨询", "入住前", "必读", "取消订单", "修改订单", "确认函", "更多",
+  "地图", "导航", "评分", "点评", "行程中", "日历", "酒店榜",
+];
 
+function isJunkLine(line) {
+  if (line.length < 4) return true;
+  const meaningful = (line.match(/[一-鿿ぁ-んァ-ヶa-zA-Z]/g) || []).length;
+  return meaningful / line.length < 0.4;
+}
+
+// 簡体中文OCRは漢字の間に余分な空白を挿入することが多いため、
+// 漢字・かな同士の間の空白だけを詰める（英単語間のスペースは残す）。
+const cleanCjkSpacing = (s) =>
+  s
+    .replace(/([一-鿿ぁ-んァ-ヶー])\s+(?=[一-鿿ぁ-んァ-ヶー])/g, "$1")
+    .trim()
+    .replace(/[—\-–]+$/, "")
+    .trim();
+
+function pickHotelName(text) {
+  const lines = text
+    .split("\n")
+    .map((l) => l.trim())
+    .filter(Boolean)
+    .filter((l) => !isJunkLine(l));
+  const candidates = lines.filter((l) => !HOTEL_NAME_BLOCKLIST.some((b) => l.includes(b)));
+  const picked =
+    candidates.find((l) => l.includes("酒店")) ||
+    candidates.find((l) => /HOTEL|RESORT|INN\b/i.test(l)) ||
+    candidates[0] ||
+    "";
+  return cleanCjkSpacing(picked);
+}
+
+/**
+ * OCR結果から日付を探す。簡体中文OCRは日付の区切り文字（年/月/日）の
+ * 前後に余分な空白を挿入することが多いため、空白を許容して照合する。
+ * 「2026年10月4日～10月6日」のような範囲表記もチェックイン/アウトの
+ * 組として1回で拾う。
+ */
+function extractHotelDates(text) {
   const dateMatches = [];
-  const ymdRe = /(20\d{2})[/\-年.](\d{1,2})[/\-月.](\d{1,2})/g;
-  let m;
-  while ((m = ymdRe.exec(text))) {
-    dateMatches.push(`${m[1]}-${String(m[2]).padStart(2, "0")}-${String(m[3]).padStart(2, "0")}`);
+
+  const rangeRe = /(20\d{2})\s*年\s*(\d{1,2})\s*月\s*(\d{1,2})\s*日[^0-9]{0,12}?(\d{1,2})\s*月\s*(\d{1,2})\s*日/;
+  const rangeM = text.match(rangeRe);
+  if (rangeM) {
+    const year = rangeM[1];
+    dateMatches.push(`${year}-${rangeM[2].padStart(2, "0")}-${rangeM[3].padStart(2, "0")}`);
+    dateMatches.push(`${year}-${rangeM[4].padStart(2, "0")}-${rangeM[5].padStart(2, "0")}`);
+  }
+
+  if (dateMatches.length < 2) {
+    const ymdRe = /(20\d{2})\s*[/\-年.]\s*(\d{1,2})\s*[/\-月.]\s*(\d{1,2})/g;
+    let m;
+    while ((m = ymdRe.exec(text))) {
+      dateMatches.push(`${m[1]}-${String(m[2]).padStart(2, "0")}-${String(m[3]).padStart(2, "0")}`);
+    }
   }
   if (dateMatches.length < 2) {
     const mdRe = /(?<!\d)(\d{1,2})[/\-](\d{1,2})(?!\d)/g;
@@ -273,18 +326,19 @@ export function parseHotelText(rawText) {
       dateMatches.push(`${year}-${String(mm[1]).padStart(2, "0")}-${String(mm[2]).padStart(2, "0")}`);
     }
   }
+
   const uniqDates = [...new Set(dateMatches)].sort();
-  const checkIn = uniqDates[0] || null;
-  const checkOut = uniqDates[1] || null;
+  return { checkIn: uniqDates[0] || null, checkOut: uniqDates[1] || null };
+}
+
+export function parseHotelText(rawText) {
+  const text = toHalfWidth(rawText || "");
+  const { checkIn, checkOut } = extractHotelDates(text);
 
   const phoneMatch = text.match(/0\d{1,4}-\d{1,4}-\d{3,4}/);
   const phone = phoneMatch ? phoneMatch[0] : null;
 
-  const hotelName =
-    text
-      .split("\n")
-      .map((l) => l.trim())
-      .find((l) => l.length >= 3 && /[^\d\s.,:\-/]/.test(l)) || "";
+  const hotelName = pickHotelName(text);
 
   return { hotelName, checkIn, checkOut, phone, rawText: text };
 }
