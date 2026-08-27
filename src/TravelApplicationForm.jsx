@@ -43,6 +43,8 @@ export default function TravelApplicationForm({ profile, showToast, onOpenSettin
   const [outboundFlight, setOutboundFlight] = useState("");
   const [transitFlight, setTransitFlight] = useState("");
   const [returnFlight, setReturnFlight] = useState("");
+  const [returnTransitFlight, setReturnTransitFlight] = useState("");
+  const [returnTransitCity, setReturnTransitCity] = useState("");
   const [stays, setStays] = useState([]);
   const [stayDraft, setStayDraft] = useState(emptyStay());
   const [generating, setGenerating] = useState(false);
@@ -94,6 +96,8 @@ export default function TravelApplicationForm({ profile, showToast, onOpenSettin
         outboundFlight,
         transitFlight,
         returnFlight,
+        returnTransitFlight,
+        returnTransitCity,
         departureDate,
         returnDate,
         stays,
@@ -158,18 +162,30 @@ export default function TravelApplicationForm({ profile, showToast, onOpenSettin
 
       <div style={cardStyle}>
         <div style={sectionTitle}>フライト</div>
-        <div style={helpText}>コードシェア便の場合は主便名のみが読み取られます（併記番号は使用しません）。</div>
+        <div style={helpText}>コードシェア便の場合は主便名のみが読み取られます（併記番号は使用しません）。乗継（中転）がある場合は、行きと帰りそれぞれの2便目も自動で読み取ります。</div>
         <ReceiptUpload
-          label="📷 フライト画面から往復の便名をまとめて読み取る"
+          label="📷 フライト画面から往復（乗継含む）の便名をまとめて読み取る"
           showToast={showToast}
           recognize={recognizeRoundTripFlight}
-          describeResult={(r) => [r.outboundFlight && `去程:${r.outboundFlight}`, r.returnFlight && `回程:${r.returnFlight}`].filter(Boolean).join("／") || null}
+          describeResult={(r) =>
+            [
+              r.outboundFlight && `去程:${r.outboundFlight}`,
+              r.outboundTransit && `中転:${r.outboundTransit}`,
+              r.returnFlight && `回程:${r.returnFlight}`,
+              r.returnTransit && `回程中転:${r.returnTransit}`,
+            ]
+              .filter(Boolean)
+              .join("／") || null
+          }
           onExtracted={(r) => {
             if (r.outboundFlight) setOutboundFlight(r.outboundFlight);
+            if (r.outboundTransit) setTransitFlight(r.outboundTransit);
             if (r.returnFlight) setReturnFlight(r.returnFlight);
+            if (r.returnTransit) setReturnTransitFlight(r.returnTransit);
+            if (r.returnTransitCity) setReturnTransitCity(normalizeCityName(r.returnTransitCity));
           }}
         />
-        <div style={{ ...helpText, marginTop: 6 }}>去程・返程が1枚に写ったスクショなら、この1回のアップロードで両方の便名欄に自動入力されます。</div>
+        <div style={{ ...helpText, marginTop: 6 }}>去程・返程が1枚に写ったスクショなら、この1回のアップロードで便名欄に自動入力されます（乗継の中転便名・中転地も含む）。</div>
 
         <label style={{ ...labelStyle, marginTop: 6 }}>去程航班名称</label>
         <input style={{ ...inputStyle, marginBottom: 6 }} placeholder="例：MU225" value={outboundFlight} onChange={(e) => setOutboundFlight(e.target.value.toUpperCase())} />
@@ -180,7 +196,7 @@ export default function TravelApplicationForm({ profile, showToast, onOpenSettin
           describeResult={(r) => (r.flightNumber ? `便名候補：${r.flightNumber}` : null)}
           onExtracted={(r) => r.flightNumber && setOutboundFlight(r.flightNumber)}
         />
-        <label style={{ ...labelStyle, marginTop: 12 }}>中转航班名称（乗継がなければ空欄）</label>
+        <label style={{ ...labelStyle, marginTop: 12 }}>中转航班名称（去程の乗継便。なければ空欄）</label>
         <input style={{ ...inputStyle, marginBottom: 10 }} placeholder="例：CA1234" value={transitFlight} onChange={(e) => setTransitFlight(e.target.value.toUpperCase())} />
         <label style={labelStyle}>回程航班名称</label>
         <input style={{ ...inputStyle, marginBottom: 6 }} placeholder="例：MU730" value={returnFlight} onChange={(e) => setReturnFlight(e.target.value.toUpperCase())} />
@@ -191,6 +207,17 @@ export default function TravelApplicationForm({ profile, showToast, onOpenSettin
           describeResult={(r) => (r.flightNumber ? `便名候補：${r.flightNumber}` : null)}
           onExtracted={(r) => r.flightNumber && setReturnFlight(r.flightNumber)}
         />
+        <label style={{ ...labelStyle, marginTop: 12 }}>回程の乗継便名（なければ空欄）</label>
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
+          <input style={inputStyle} placeholder="例：CA1234" value={returnTransitFlight} onChange={(e) => setReturnTransitFlight(e.target.value.toUpperCase())} />
+          <input
+            style={inputStyle}
+            placeholder="中転地（例：胡志明市）"
+            value={returnTransitCity}
+            onChange={(e) => setReturnTransitCity(e.target.value)}
+            onBlur={(e) => setReturnTransitCity(normalizeCityName(e.target.value))}
+          />
+        </div>
       </div>
 
       <div style={cardStyle}>

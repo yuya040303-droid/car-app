@@ -30,6 +30,7 @@ const fmtMonthDay = (isoDate) => {
  * {
  *   name, passportNo, employeeId, email, overseasMobile, emergencyContact,
  *   country, outboundFlight, transitFlight, returnFlight,
+ *   returnTransitFlight, returnTransitCity, // 回程の乗継便名・中転地（J12/L12）
  *   departureDate, returnDate, // ISO "YYYY-MM-DD"
  *   submittedDate, // ISO "YYYY-MM-DD"（省略時は当日）
  *   stays: [{ city, checkIn, checkOut, hotelName, tel, fax, address }],
@@ -54,6 +55,8 @@ export async function generateTravelApplicationExcel(data) {
   ws.getCell("F11").value = `去程航班名称：${data.outboundFlight || ""}`;
   ws.getCell("I11").value = `中转航班名称：${data.transitFlight || ""}`;
   ws.getCell("F12").value = `回程航班名称: ${data.returnFlight || ""}`;
+  ws.getCell("J12").value = data.returnTransitFlight ? `  航班名: ${data.returnTransitFlight}` : "  航班名:";
+  ws.getCell("L12").value = data.returnTransitCity ? `城市:${data.returnTransitCity}` : "城市:";
   if (data.departureDate && data.returnDate) {
     ws.getCell("B14").value = `出差日期：　　　${fmtMonthDay(data.departureDate)}（出发），　　${fmtMonthDay(data.returnDate)}（回国）`;
   } else {

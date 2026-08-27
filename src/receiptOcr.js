@@ -156,12 +156,29 @@ export function parseFlightNumberText(rawText) {
 const OUTBOUND_KEYWORDS = ["去程", "去程航班", "出発便", "OUTBOUND", "DEPARTING FLIGHT"];
 const RETURN_KEYWORDS = ["返程", "回程", "回程航班", "帰国便", "帰り便", "RETURN", "INBOUND"];
 
+// 簡体中文OCR（chi_sim）は漢字の間に余分な空白を挿入することが多いため、
+// 中国語キーワードは文字間に任意の空白を許容して照合する。英数字の
+// キーワードはそのまま（indexOf）で照合する。
+const isCjk = (s) => /^[぀-ヿ㐀-鿿]+$/.test(s);
+const flexRe = (s, flags = "") =>
+  new RegExp(
+    s
+      .split("")
+      .map((c) => c.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"))
+      .join("\\s*"),
+    flags
+  );
+
+const TRANSIT_CITY_RE = /(?:中\s*转|經\s*停|经\s*停|转\s*机|轉\s*機)\s*([一-鿿ァ-ヶー\s]{2,10})/;
+
 /**
  * 去程（往路）・返程（復路）の両方が写った1枚のフライト画面から、
  * それぞれの便名を1回のOCRで読み取る。「去程」「返程/回程」等の
- * セクション見出しの直後に現れる主便名（コードシェアの併記は除く）を
- * それぞれ採用する。見出しが見つからない場合は、検出順に1件目を
- * 往路、往路と異なる2件目を復路の候補として扱う。
+ * セクション見出し以降に現れる便名を検出順に採用し、1件目を主便名、
+ * 2件目（コードシェアの併記は除く）を中転（乗継）便名として返す。
+ * 見出しが見つからない場合は、検出順に前半を往路、後半を復路として
+ * 扱う。中転地の都市名は「中转／经停」等のキーワード直後の地名を
+ * 候補として返す（見つからない場合はnull）。
  */
 export function parseRoundTripFlightText(rawText) {
   const text = toHalfWidth(rawText || "").toUpperCase();
@@ -170,29 +187,50 @@ export function parseRoundTripFlightText(rawText) {
   const firstIndexOf = (keywords) => {
     let best = Infinity;
     for (const kw of keywords) {
-      const idx = text.indexOf(kw.toUpperCase());
+      const upper = kw.toUpperCase();
+      const idx = isCjk(upper) ? (flexRe(upper).exec(text)?.index ?? -1) : text.indexOf(upper);
       if (idx !== -1 && idx < best) best = idx;
     }
     return best === Infinity ? null : best;
   };
 
-  const outboundAt = firstIndexOf(OUTBOUND_KEYWORDS);
+  let outboundAt = firstIndexOf(OUTBOUND_KEYWORDS);
   const returnAt = firstIndexOf(RETURN_KEYWORDS);
+  // 「去程」の文字自体がOCRで読めないことがある。「返程/回程」だけ
+  // 検出できた場合は、先頭から返程セクションの直前までを去程として扱う
+  // （往路の情報が先に表示される一般的なレイアウトを前提とする）。
+  if (outboundAt === null && returnAt !== null) outboundAt = 0;
 
-  const pickAfter = (startIdx, endIdx) =>
-    candidates.find((c) => !c.insideParens && c.index > startIdx && (endIdx === null || c.index < endIdx)) || null;
+  const sectionCandidates = (startIdx, endIdx) =>
+    candidates.filter((c) => !c.insideParens && c.index > startIdx && (endIdx === null || c.index < endIdx));
+
+  const sectionTransitCity = (startIdx, endIdx) => {
+    const slice = text.slice(startIdx, endIdx === null ? text.length : endIdx);
+    const m = slice.match(TRANSIT_CITY_RE);
+    return m ? m[1].replace(/\s+/g, "") : null;
+  };
 
   let outboundFlight = null;
+  let outboundTransit = null;
+  let outboundTransitCity = null;
   let returnFlight = null;
+  let returnTransit = null;
+  let returnTransitCity = null;
 
   if (outboundAt !== null || returnAt !== null) {
     if (outboundAt !== null) {
       const sectionEnd = returnAt !== null && returnAt > outboundAt ? returnAt : null;
-      outboundFlight = pickAfter(outboundAt, sectionEnd)?.value || null;
+      const list = sectionCandidates(outboundAt, sectionEnd);
+      outboundFlight = list[0]?.value || null;
+      outboundTransit = list.find((c) => c.value !== outboundFlight)?.value || null;
+      outboundTransitCity = sectionTransitCity(outboundAt, sectionEnd);
     }
     if (returnAt !== null) {
       const sectionEnd = outboundAt !== null && outboundAt > returnAt ? outboundAt : null;
-      returnFlight = pickAfter(returnAt, sectionEnd)?.value || null;
+      const list = sectionCandidates(returnAt, sectionEnd);
+      returnFlight = list[0]?.value || null;
+      returnTransit = list.find((c) => c.value !== returnFlight)?.value || null;
+      returnTransitCity = sectionTransitCity(returnAt, sectionEnd);
     }
   } else {
     const nonParens = candidates.filter((c) => !c.insideParens);
@@ -200,7 +238,16 @@ export function parseRoundTripFlightText(rawText) {
     returnFlight = nonParens.find((c) => c.value !== outboundFlight)?.value || null;
   }
 
-  return { outboundFlight, returnFlight, candidates: candidates.map((c) => c.value), rawText: text };
+  return {
+    outboundFlight,
+    outboundTransit,
+    outboundTransitCity,
+    returnFlight,
+    returnTransit,
+    returnTransitCity,
+    candidates: candidates.map((c) => c.value),
+    rawText: text,
+  };
 }
 
 /**
